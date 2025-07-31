@@ -1,0 +1,2 @@
+class AsyncPostgresSaver:
+    pass

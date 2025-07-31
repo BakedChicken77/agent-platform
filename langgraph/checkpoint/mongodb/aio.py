@@ -1,0 +1,2 @@
+class AsyncMongoDBSaver:
+    pass
