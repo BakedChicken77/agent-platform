@@ -1,24 +1,20 @@
 
 from dataclasses import dataclass
 
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.pregel import Pregel
-
+from agents.agent_team import agent_team
+from agents.agent_team2 import agent_team2
 from agents.bg_task_agent.bg_task_agent import bg_task_agent
 from agents.chatbot import chatbot
 from agents.command_agent import command_agent
+from agents.interactive_ideation_agent import interactive_ideation_agent
 from agents.interrupt_agent import interrupt_agent
 from agents.knowledge_base_agent import kb_agent
 from agents.langgraph_supervisor_agent import langgraph_supervisor_agent
 from agents.rag_assistant import rag_assistant
 from agents.research_assistant import research_assistant
-from agents.agent_team import agent_team 
-from agents.agent_team2 import agent_team2
-
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.pregel import Pregel
 from schema import AgentInfo
-
-
-
 
 DEFAULT_AGENT = "rag-assistant"#"chatbot"
 # DEFAULT_AGENT = "research-assistant"
@@ -57,9 +53,13 @@ agents: dict[str, Agent] = {
         description="Hierarchical research agent team.",
         graph=agent_team,
     ),
-    "agent-team2": Agent(                          
+    "agent-team2": Agent(
         description="Hierarchical research→write agent team.",
         graph=agent_team2,
+    ),
+    "interactive-ideation-agent": Agent(
+        description="Interactive ideation workflow agent.",
+        graph=interactive_ideation_agent,
     ),
 }
 
