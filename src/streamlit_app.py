@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import urllib.parse
@@ -6,6 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import streamlit as st
+import msal  # ← Added for Azure AD OAuth2
 from dotenv import load_dotenv
 from pydantic import ValidationError
 
@@ -15,19 +15,33 @@ from schema.task_data import TaskData, TaskDataStatus
 
 # A Streamlit app for interacting with the langgraph agent via a simple chat interface.
 # The app has three main functions which are all run async:
-
+#
 # - main() - sets up the streamlit app and high level structure
 # - draw_messages() - draws a set of chat messages - either replaying existing messages
 #   or streaming new ones.
 # - handle_feedback() - Draws a feedback widget and records feedback from the user.
-
+#
 # The app heavily uses AgentClient to interact with the agent's FastAPI endpoints.
 
-
-APP_TITLE = "Agent Service Toolkit"
-APP_ICON = "🧰"
+APP_TITLE = "AIS Agent Platform"
+APP_ICON = "🤖"
 USER_ID_COOKIE = "user_id"
 
+# ——— OAuth2 Configuration ———
+load_dotenv()
+TENANT_ID = os.getenv("AZURE_AD_TENANT_ID")
+CLIENT_ID = os.getenv("AZURE_AD_CLIENT_ID")
+CLIENT_SECRET = os.getenv("AZURE_AD_CLIENT_SECRET")
+# The redirect URI must match one of those registered in your Azure AD app
+REDIRECT_URI = os.getenv("STREAMLIT_REDIRECT_URI")  # e.g. "https://your-streamlit-app.azurewebsites.net/"
+AUTHORITY = f"https://login.microsoftonline.us/{TENANT_ID}"
+# Scope should include your API's custom scope; replace with your actual scope URI
+SCOPE = [f"api://{os.getenv('AZURE_AD_API_CLIENT_ID')}/access_as_user"]
+msal_app = msal.ConfidentialClientApplication(
+    CLIENT_ID,
+    authority=AUTHORITY,
+    client_credential=CLIENT_SECRET,
+)
 
 def get_or_create_user_id() -> str:
     """Get the user ID from session state or URL parameters, or create a new one if it doesn't exist."""
@@ -60,6 +74,32 @@ async def main() -> None:
         menu_items={},
     )
 
+    # ——— Handle OAuth2 redirect & token exchange ———
+    params = st.query_params
+    if "code" in params and "access_token" not in st.session_state:
+        code = params["code"][0]
+        result = msal_app.acquire_token_by_authorization_code(
+            code,
+            scopes=SCOPE,
+            redirect_uri=REDIRECT_URI,
+        )
+        token = result.get("access_token")
+        if not token:
+            st.error("Failed to obtain access token.")
+            return
+        st.session_state["access_token"] = token
+        # clear the code from URL
+        st.experimental_set_query_params()
+
+    # ——— Require login if we don’t yet have a token ———
+    if "access_token" not in st.session_state:
+        auth_url = msal_app.get_authorization_request_url(
+            scopes=SCOPE,
+            redirect_uri=REDIRECT_URI,
+        )
+        st.markdown(f"[Sign in with Microsoft]({auth_url})")
+        return  # stop further rendering until signed in
+
     # Hide the streamlit upper-right chrome
     st.html(
         """
@@ -81,15 +121,15 @@ async def main() -> None:
     user_id = get_or_create_user_id()
 
     if "agent_client" not in st.session_state:
-        load_dotenv()
-        agent_url = os.getenv("AGENT_URL")
-        if not agent_url:
-            host = os.getenv("HOST", "0.0.0.0")
-            port = os.getenv("PORT", 8080)
-            agent_url = f"http://{host}:{port}"
+        agent_url = os.getenv("AGENT_URL") or f"http://{os.getenv('HOST','0.0.0.0')}:{os.getenv('PORT',8080)}"
         try:
             with st.spinner("Connecting to agent service..."):
-                st.session_state.agent_client = AgentClient(base_url=agent_url)
+                # Inject access_token during AgentClient construction
+                client = AgentClient(
+                    base_url=agent_url,
+                    access_token=st.session_state["access_token"]
+                )
+                st.session_state.agent_client = client
         except AgentClientError as e:
             st.error(f"Error connecting to agent service at {agent_url}: {e}")
             st.markdown("The service might be booting up. Try again in a few seconds.")
@@ -140,20 +180,19 @@ async def main() -> None:
 
         @st.dialog("Architecture")
         def architecture_dialog() -> None:
-            st.image(
-                "https://github.com/JoshuaC215/agent-service-toolkit/blob/main/media/agent_architecture.png?raw=true"
-            )
-            "[View full size on Github](https://github.com/JoshuaC215/agent-service-toolkit/blob/main/media/agent_architecture.png)"
-            st.caption(
-                "App hosted on [Streamlit Cloud](https://share.streamlit.io/) with FastAPI service running in [Azure](https://learn.microsoft.com/en-us/azure/app-service/)"
-            )
+            file_path = f"./workflow_diagrams/{agent_client.agent}.png"
+            if os.path.exists(file_path):
+                st.image(file_path)
+            else:
+                st.warning("No diagram available for this agent.")
+
 
         if st.button(":material/schema: Architecture", use_container_width=True):
             architecture_dialog()
 
         with st.popover(":material/policy: Privacy", use_container_width=True):
             st.write(
-                "Prompts, responses and feedback in this app are anonymously recorded and saved to LangSmith for product evaluation and improvement purposes only."
+                "TBD"
             )
 
         @st.dialog("Share/resume chat")
@@ -194,6 +233,8 @@ async def main() -> None:
             case "rag-assistant":
                 WELCOME = """Hello! I'm an AI-powered Company Policy & HR assistant with access to AIS SEPS.
                 I can help you find information about benefits, remote work, time-off policies, company values, and more. Ask me anything!"""
+            case "interactive-ideation-agent":
+                WELCOME = """Hello! Tell me about your process improvement idea"""
             case _:
                 WELCOME = "Hello! I'm an AI agent. Ask me anything!"
 
@@ -339,7 +380,7 @@ async def draw_messages(
                             if "transfer_to" in tool_call["name"]:
                                 await handle_agent_msgs(messages_agen, call_results, is_new)
                                 break
-                            tool_result: ChatMessage = await anext(messages_agen)
+                            tool_result: ChatMessage =	await anext(messages_agen)
 
                             if tool_result.type != "tool":
                                 st.error(f"Unexpected ChatMessage type: {tool_result.type}")
@@ -443,7 +484,7 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
                 status.update(state="complete")
             break
         # Read next message
-        sub_msg = await anext(messages_agen)
+        sub_msg =	await anext(messages_agen)
         # this should only happen is skip_stream flag is removed
         # if isinstance(sub_msg, str):
         #     continue
@@ -474,4 +515,3 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
 
 if __name__ == "__main__":
     asyncio.run(main())
-
