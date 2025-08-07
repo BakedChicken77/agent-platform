@@ -1,4 +1,4 @@
-# C:\Users\Steve.Long\Downloads\agent-service-toolkit-main\agent-service-toolkit-main\src\core\logging_middleware.py
+# src/core/logging_middleware.py
 
 from time import monotonic
 import logging
