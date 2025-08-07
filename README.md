@@ -1,5 +1,4 @@
-
-# 🧰 AI Agent Service Toolkit
+# 🧰 AIS Agent Platform
 
 [![build status](https://github.drs.com/Steve-Long/Langgraph_Powered_Agent/actions/workflows/test.yml/badge.svg)](https://github.drs.com/Steve-Long/Langgraph_Powered_Agent/actions/workflows/test.yml)
 
@@ -14,9 +13,6 @@ This project offers a template for you to easily build and run your own agents u
 
 ## Overview
 
-### [Try the app!](https://example.com/)
-
-<a href="https://agent-service-toolkit.streamlit.app/"><img src="media/app_screenshot.png" width="600"></a>
 
 ### Quickstart
 
@@ -46,10 +42,6 @@ Run with docker
 echo 'OPENAI_API_KEY=your_openai_api_key' >> .env
 docker compose watch
 ```
-
-### Architecture Diagram
-
-<img src="media/agent_architecture.png" width="600">
 
 ### Key Features
 
@@ -230,4 +222,3 @@ Contributions are welcome! Please feel free to submit a Pull Request. Currently 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
