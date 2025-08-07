@@ -1,4 +1,3 @@
-
 from typing import List, Optional, Literal
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -31,7 +30,8 @@ def make_supervisor_node(llm: BaseChatModel, members: list[str]) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
         ] + state["messages"]
-        response = llm.with_structured_output(Router).invoke(messages)
+        # response = llm.with_structured_output(Router).invoke(messages)
+        response = llm.with_structured_output(Router, method="function_calling").invoke(messages)
         goto = response["next"]
         if goto == "FINISH":
             goto = END

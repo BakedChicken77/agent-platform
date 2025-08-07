@@ -30,7 +30,7 @@ class AgentState(MessagesState, total=False):
 web_search = DuckDuckGoSearchResults(name="WebSearch")
 # tools = [web_search, calculator]
 # tools = [database_search, calculator, Get_Full_Doc_Text]
-tools = [SEPS_database_search, SEPS_get_full_doc_text, calculator]
+tools = [SEPS_database_search, SEPS_get_full_doc_text]
 
 # Add weather tool if API key is set
 # Register for an API key at https://openweathermap.org/api/
@@ -48,8 +48,6 @@ You are a highly capable research assistant. You have access to the following to
 * **`SEPS_Get_Full_Doc_Text`** — Retrieves up to 15 pages of a document by its exact filename (e.g., `'SEP-04-01(M) Process for Product Development.docx'`) and a target page number.
     - If page_number ≤ 10, it returns pages 1 through 15.
     - If page_number > 10, it returns pages from page_number - 7 to page_number + 7.
-* **`Calculator`** — Executes mathematical expressions using `numexpr`.
-
 ---
 
 ### Tool Usage Instructions:
@@ -57,7 +55,6 @@ You are a highly capable research assistant. You have access to the following to
 1. **Always begin** with `Database_Search` to identify relevant documents via semantic search.
 2. For every document returned, **immediately retrieve its full text** using `SEPS_Get_Full_Doc_Text`.
 3. **Do not rely solely** on the semantic search output — it is incomplete. Your answers **must be based on the full document text**.
-4. **Use `Calculator`** for any mathematical operations required to answer the question.
 
 NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
 ---
@@ -65,7 +62,6 @@ NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
 ### Response Guidelines:
 
 * Cite your sources with **markdown-formatted links** using **only URLs returned by the tools**. Limit to **1-2 citations** per response unless more are essential.
-* When presenting math results, use **human-readable expressions**, e.g., `"300 * 200 = 60,000"` — not NumExpr format.
 * Be direct, thorough, and precise. **Do not speculate.** Only respond based on verified content from retrieved documents.
 """
 
@@ -164,5 +160,5 @@ def pending_tool_calls(state: AgentState) -> Literal["tools", "done"]:
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
 
 
-research_assistant = agent.compile()
-research_assistant.name = "research_assistant"
+SEPS_Agent_2tools = agent.compile()
+SEPS_Agent_2tools.name = "SEPS_Agent_2tools"

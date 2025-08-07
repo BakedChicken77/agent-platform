@@ -1,43 +1,30 @@
-
 import asyncio
 from typing import cast
-from uuid import uuid4
+# from uuid import uuid4
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
-from langchain_core.runnables import RunnableConfig
-from langgraph.graph import MessagesState
+# from langchain_core.messages import HumanMessage
+# from langchain_core.runnables import RunnableConfig
+# from langgraph.graph import MessagesState
 from langgraph.graph.state import CompiledStateGraph
+from pathlib import Path
 
 load_dotenv()
 
-from agents import DEFAULT_AGENT, get_agent  # noqa: E402
+from agents import get_agent, get_all_agent_info  # noqa: E402
 
-# The default agent uses StateGraph.compile() which returns CompiledStateGraph
-agent = cast(CompiledStateGraph, get_agent(DEFAULT_AGENT))
-agent1 = cast(CompiledStateGraph, get_agent('chatbot'))
-agent2 = cast(CompiledStateGraph, get_agent('research-assistant'))
-agent3 = cast(CompiledStateGraph, get_agent('rag-assistant'))
-agent4 = cast(CompiledStateGraph, get_agent('command-agent'))
-agent5 = cast(CompiledStateGraph, get_agent('bg-task-agent'))
-agent6 = cast(CompiledStateGraph, get_agent('langgraph-supervisor-agent'))
-agent7 = cast(CompiledStateGraph, get_agent('knowledge-base-agent'))
-agent8 = cast(CompiledStateGraph, get_agent('agent-team'))
-agent9 = cast(CompiledStateGraph, get_agent('agent-team2'))
+folder_path = Path(r".\workflow_diagrams")
+
+agents_info = get_all_agent_info()
+agents = []
+for agent in agents_info:
+    agents.append(cast(CompiledStateGraph, get_agent(agent.key)))
+
 
 async def main() -> None:
-    
-
-    agent1.get_graph(xray=True).draw_png("chatbot.png")
-    agent2.get_graph(xray=True).draw_png("research-assistant.png")
-    agent3.get_graph(xray=True).draw_png("rag-assistant.png")
-    agent4.get_graph(xray=True).draw_png("command-agent.png")
-    agent5.get_graph(xray=True).draw_png("bg-task-agent.png")
-    agent6.get_graph(xray=True).draw_png("langgraph-supervisor-agent.png")
-    agent7.get_graph(xray=True).draw_png("knowledge-base-agent.png")
-    agent8.get_graph(xray=True).draw_png("agent-team.png")
-    agent9.get_graph(xray=True).draw_png("agent-team2.png")
-
+    for agent in agents:
+        file_path = folder_path / Path(f"{agent.name}.png")
+        agent.get_graph(xray=True).draw_png(file_path)
 
 
 
@@ -63,4 +50,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

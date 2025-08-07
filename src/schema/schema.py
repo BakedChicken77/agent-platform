@@ -1,4 +1,3 @@
-
 from typing import Any, Literal, NotRequired
 
 from pydantic import BaseModel, Field, SerializeAsAny
@@ -12,7 +11,7 @@ class AgentInfo(BaseModel):
 
     key: str = Field(
         description="Agent key.",
-        examples=["research-assistant"],
+        examples=["chatbot"],
     )
     description: str = Field(
         description="Description of the agent.",
@@ -31,7 +30,7 @@ class ServiceMetadata(BaseModel):
     )
     default_agent: str = Field(
         description="Default agent used when none is specified.",
-        examples=["research-assistant"],
+        examples=["chatbot"],
     )
     default_model: AllModelEnum = Field(
         description="Default model used when none is specified.",
@@ -174,4 +173,3 @@ class ChatHistoryInput(BaseModel):
 
 class ChatHistory(BaseModel):
     messages: list[ChatMessage]
-

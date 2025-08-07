@@ -1,8 +1,7 @@
-
 from pathlib import Path
 # from tempfile import TemporaryDirectory
-from typing import Dict, Optional
-from typing import Annotated, List
+from typing import Dict, Optional, Annotated, List
+
 
 
 from langchain_core.tools import tool
@@ -10,11 +9,11 @@ from langchain_core.tools import tool
 
 from langchain_experimental.utilities import PythonREPL
 from langchain_experimental.tools.python.tool import PythonREPLTool
-import math
+import math, numpy, matplotlib
 
 # _TEMP_DIRECTORY = TemporaryDirectory()
 # WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
-WORKING_DIRECTORY = Path('.\pythonrepl_sandbox')
+WORKING_DIRECTORY = Path(r'.\pythonrepl_sandbox')
 
 
 @tool
@@ -88,6 +87,9 @@ def edit_document(
 safe_globals = {
     "__builtins__": {"print": print},
     "math": math,
+    "numpy": numpy, 
+    "matplotlib": matplotlib
+
 }
 repl = PythonREPL(_globals=safe_globals, _locals={})
 

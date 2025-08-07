@@ -1,4 +1,3 @@
-
 from functools import cache
 from typing import TypeAlias
 
@@ -96,8 +95,8 @@ def get_model(model_name: AllModelEnum, /) -> ModelT:
             api_version=settings.AZURE_OPENAI_API_VERSION,
             temperature=settings.TEMPERATURE,
             streaming=True,
-            timeout=60,
-            max_retries=3,
+            # timeout=60,
+            # max_retries=3,
         )
     if model_name in DeepseekModelName:
         return ChatOpenAI(
@@ -139,4 +138,3 @@ def get_model(model_name: AllModelEnum, /) -> ModelT:
         return FakeToolModel(responses=["This is a test response from the fake model."])
 
     raise ValueError(f"Unsupported model: {model_name}")
-

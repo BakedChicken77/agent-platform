@@ -1,4 +1,3 @@
-
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
@@ -30,6 +29,7 @@ class AgentClient:
         agent: str | None = None,
         timeout: float | None = None,
         get_info: bool = True,
+        access_token: str | None = None,  # ← added for OAuth2
     ) -> None:
         """
         Initialize the client.
@@ -40,9 +40,11 @@ class AgentClient:
             timeout (float, optional): The timeout for requests.
             get_info (bool, optional): Whether to fetch agent information on init.
                 Default: True
+            access_token (str, optional): Bearer token obtained via Azure AD OAuth2.
         """
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
+        self.access_token = access_token  # ← store OAuth2 token
         self.timeout = timeout
         self.info: ServiceMetadata | None = None
         self.agent: str | None = None
@@ -51,10 +53,18 @@ class AgentClient:
         if agent:
             self.update_agent(agent)
 
+    # -------- new helper --------
+    def set_token(self, token: str | None) -> None:
+        """Update the bearer token at runtime (e.g., per‑session OAuth2 token)."""
+        self.access_token = token
+    # ----------------------------
+
     @property
     def _headers(self) -> dict[str, str]:
         headers = {}
-        if self.auth_secret:
+        if self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        elif self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
 
@@ -359,4 +369,3 @@ class AgentClient:
             raise AgentClientError(f"Error: {e}")
 
         return ChatHistory.model_validate(response.json())
-

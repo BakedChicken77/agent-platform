@@ -1,8 +1,9 @@
-
 import os
 from enum import StrEnum
 from json import loads
-from typing import Annotated, Any
+from typing import Annotated, Any, List
+
+from functools import lru_cache
 
 from dotenv import find_dotenv
 from pydantic import (
@@ -54,10 +55,20 @@ class Settings(BaseSettings):
     )
     MODE: str | None = None
 
-    HOST: str = "http://localhost"#"0.0.0.0"
+    HOST: str = "http://localhost"  # "0.0.0.0"
     PORT: int = 8080
 
     AUTH_SECRET: SecretStr | None = None
+
+    WHITELIST: List[str] = Field(default_factory=list, env="WHITELIST")
+
+    # —— Entra ID OAuth2 settings ——
+    AZURE_AD_TENANT_ID: str | None = None
+    AZURE_AD_CLIENT_ID: str | None = None
+    AZURE_AD_CLIENT_SECRET: SecretStr | None = None
+    AZURE_AD_API_CLIENT_ID: str | None = None  # used in SCOPE: api://<API_CLIENT_ID>/access_as_user
+    AUTH_ENABLED: bool = True
+    # ——
 
     OPENAI_API_KEY: SecretStr | None = None
     DEEPSEEK_API_KEY: SecretStr | None = None
@@ -127,7 +138,7 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT_MAP: dict[str, str] = Field(
         default_factory=dict, description="Map of model names to Azure deployment IDs"
     )
-    
+
     # LLM Settings
     TEMPERATURE: float = 0.05
 
@@ -198,7 +209,7 @@ class Settings(BaseSettings):
                     self.AVAILABLE_MODELS.update(set(FakeModelName))
                 case Provider.AZURE_OPENAI:
                     if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = AzureOpenAIModelName.AZURE_GPT_4O_MINI
+                        self.DEFAULT_MODEL = AzureOpenAIModelName.AZURE_GPT_4O
                     self.AVAILABLE_MODELS.update(set(AzureOpenAIModelName))
                     # Validate Azure OpenAI settings if Azure provider is available
                     if not self.AZURE_OPENAI_API_KEY:
@@ -230,9 +241,21 @@ class Settings(BaseSettings):
     def BASE_URL(self) -> str:
         return f"http://{self.HOST}:{self.PORT}"
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def JWKS_URL(self) -> str | None:
+        if self.AZURE_AD_TENANT_ID:
+            return f"https://login.microsoftonline.us/{self.AZURE_AD_TENANT_ID}/discovery/v2.0/keys"
+        return None
+
     def is_dev(self) -> bool:
         return self.MODE == "dev"
 
 
 settings = Settings()
 
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:  # pragma: no cover
+    """Return a cached instance so settings are evaluated once only."""
+
+    return Settings()

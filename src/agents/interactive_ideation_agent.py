@@ -1,12 +1,13 @@
 import logging
 from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_openai import AzureChatOpenAI
+from langgraph.types import interrupt
 
 from core import settings
 from langgraph.graph import END, MessagesState, StateGraph
+from langgraph.checkpoint.memory import InMemorySaver  # Added for state persistence
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,10 @@ class IdeationState(MessagesState, total=False):
 
 
 PHASE_QUESTIONS = {
-    1: "Phase 1 – What idea would you like to propose?",
-    2: "Phase 2 – Brainstorm potential use cases and benefits.",
-    3: "Phase 3 – Outline a high-level execution roadmap.",
-    4: "Phase 4 – List risks, blockers or open questions.",
+    1: "Phase 1 - What idea would you like to propose?",
+    2: "Phase 2 - Brainstorm potential use cases and benefits.",
+    3: "Phase 3 - Outline a high-level execution roadmap.",
+    4: "Phase 4 - List risks, blockers or open questions.",
 }
 
 FORMAT_TEMPLATE = (
@@ -38,39 +39,46 @@ APPROVAL_TEMPLATE = (
 
 
 async def ask_phase(state: IdeationState, config: RunnableConfig) -> IdeationState:
-    """Ask the phase-specific question."""
+    """Ask the phase-specific question and capture user input."""
     phase = state.get("phase", 1)
     question = PHASE_QUESTIONS.get(phase, "")
     logger.debug("Asking question for phase %s", phase)
-    return {"messages": [AIMessage(content=question)], "approval_state": "pending"}
+    # Ask the question and pause for user input
+    user_reply = interrupt(question)
+    return {
+        **state,
+        "messages": state.get("messages", []) + [HumanMessage(content=user_reply)],
+        "approval_state": "pending",
+    }
 
 
 async def format_phase(state: IdeationState, config: RunnableConfig) -> IdeationState:
-    """Summarize user input and ask for confirmation."""
-    human_messages = [m.content for m in state["messages"] if isinstance(m, HumanMessage)]
+    """Summarize user input, ask for confirmation, and capture response."""
+    human_messages = [m.content for m in state.get("messages", []) if isinstance(m, HumanMessage)]
     user_input = human_messages[-1] if human_messages else ""
     logger.debug("Formatting user input: %s", user_input)
     formatted = FORMAT_TEMPLATE.format(user_input=user_input)
-    return {"messages": [AIMessage(content=formatted)], "last_output": formatted}
+    # Show formatted summary and wait for user feedback
+    interrupt(formatted)
+    response_messages = state.get("messages", []) + [AIMessage(content=formatted)]
+    return {
+        **state,
+        "messages": response_messages,
+        "last_output": formatted,
+    }
 
 
 async def check_approval(state: IdeationState, config: RunnableConfig) -> IdeationState:
-    """Determine if the user approved the previous output."""
-    human_messages = [m.content for m in state["messages"] if isinstance(m, HumanMessage)]
-    response = human_messages[-1] if human_messages else ""
-    logger.debug("Checking approval for response: %s", response)
-    prompt = SystemMessage(content=APPROVAL_TEMPLATE.format(response=response))
-    model = AzureChatOpenAI(
-        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-        deployment_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-        api_version=settings.AZURE_OPENAI_API_VERSION,
-        temperature=0.0,
-    )
-    result = await model.ainvoke([prompt])
-    output = result.content.strip().lower()
-    approval = "approved" if output.startswith("approved") else "changes_requested"
-    logger.debug("Approval result: %s", approval)
-    return {"approval_state": approval}
+    """Prompt user for approval of last output."""
+    prompt = f"Do you approve the following summary?\n\n{state.get('last_output', '')}"
+    logger.debug("Checking approval prompt: %s", prompt)
+    # Pause for approval response
+    response = interrupt(prompt)
+    approval = "approved" if response.strip().lower().startswith("y") else "changes_requested"
+    return {
+        **state,
+        "approval_state": approval,
+    }
 
 
 async def increment_phase(state: IdeationState, config: RunnableConfig) -> IdeationState:
@@ -79,7 +87,11 @@ async def increment_phase(state: IdeationState, config: RunnableConfig) -> Ideat
     logger.debug("Current phase %s with state %s", phase, state.get("approval_state"))
     if state.get("approval_state") == "approved":
         phase += 1
-    return {"phase": phase, "approval_state": "pending"}
+    return {
+        **state,
+        "phase": phase,
+        "approval_state": "pending",
+    }
 
 
 # Build graph
@@ -116,11 +128,11 @@ agent.add_conditional_edges("increment_phase", route_continue, {
     "end": END,
 })
 
-agent.interrupt_after("ask_phase")
-agent.interrupt_after("format_phase")
-
-interactive_ideation_agent = agent.compile()
-interactive_ideation_agent.name = "interactive-ideation-agent"
+# Compile graph for human-in-the-loop
+interactive_ideation_agent = agent.compile(
+    checkpointer=InMemorySaver(),
+)
+interactive_ideation_agent.name = "BEX-Idea-Agent"
 
 
 def get_ideation_agent_graph() -> StateGraph:

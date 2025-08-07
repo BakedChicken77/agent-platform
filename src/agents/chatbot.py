@@ -1,4 +1,3 @@
-
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.func import entrypoint
@@ -24,3 +23,4 @@ async def chatbot(
         value={"messages": [response]}, save={"messages": messages + [response]}
     )
 
+chatbot.name = "chatbot"
