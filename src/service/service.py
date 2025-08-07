@@ -1,16 +1,16 @@
-
+import os
 import inspect
 import json
 import logging
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -20,7 +20,7 @@ from langgraph.types import Command, Interrupt
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
-from core import settings
+from core import settings, get_settings, Settings, LoggingMiddleware
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -38,22 +38,16 @@ from service.utils import (
     remove_tool_calls,
 )
 
+from service.auth import verify_jwt
+from auth.middleware import AuthMiddleware
+
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
 
-
-def verify_bearer(
-    http_auth: Annotated[
-        HTTPAuthorizationCredentials | None,
-        Depends(HTTPBearer(description="Please provide AUTH_SECRET api key.", auto_error=False)),
-    ],
-) -> None:
-    if not settings.AUTH_SECRET:
-        return
-    auth_secret = settings.AUTH_SECRET.get_secret_value()
-    if not http_auth or http_auth.credentials != auth_secret:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
+# CORS configuration
+origins = []
+if os.getenv("STREAMLIT_APP_URL"):
+    origins.append(os.getenv("STREAMLIT_APP_URL"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -86,8 +80,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
-router = APIRouter(dependencies=[Depends(verify_bearer)])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],#origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],#["Authorization", "authorization", "Content-Type"],
+)
+settings: Settings = get_settings()
 
+app.add_middleware(AuthMiddleware, settings=settings)
+
+
+app.add_middleware(LoggingMiddleware)
+router = APIRouter()
 
 @router.get("/info")
 async def info() -> ServiceMetadata:
@@ -99,6 +105,11 @@ async def info() -> ServiceMetadata:
         default_agent=DEFAULT_AGENT,
         default_model=settings.DEFAULT_MODEL,
     )
+
+@router.get("/me")
+async def get_me(request: Request):
+    return request.state.user
+
 
 
 async def _handle_input(user_input: UserInput, agent: AgentGraph) -> tuple[dict[str, Any], UUID]:
@@ -409,4 +420,3 @@ async def health_check():
 
 
 app.include_router(router)
-
