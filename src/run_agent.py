@@ -1,6 +1,6 @@
 import asyncio
 from typing import cast
-# from uuid import uuid4
+from uuid import uuid4
 
 from dotenv import load_dotenv
 # from langchain_core.messages import HumanMessage
@@ -28,15 +28,16 @@ async def main() -> None:
 
 
 
-
-    # inputs: MessagesState = {
-    #     "messages": [HumanMessage("Find me a recipe for chocolate chip cookies")]
-    # }
-    # result = await agent.ainvoke(
-    #     input=inputs,
-    #     config=RunnableConfig(configurable={"thread_id": uuid4()}),
-    # )
-    # result["messages"][-1].pretty_print()
+        # if agent.name == "mtp_mapper_workflow":
+            
+            # inputs: MessagesState = {
+            #     "messages": [HumanMessage("AS-18 i) Pod software will be based on the P5 Spectrum Relocation software, which includes the 114 player adaptive mode.")]
+            # }
+            # result = await agent.ainvoke(
+            #     input=inputs,
+            #     config=RunnableConfig(configurable={"thread_id": uuid4()}),
+            # )
+            # result["messages"][-1].pretty_print()
 
     # # Draw the agent graph as png
     # # requires:
