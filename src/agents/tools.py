@@ -66,8 +66,6 @@ Page Content:
 ``` 
 {content}
 ```
-
----
 """
         )
 
@@ -308,6 +306,12 @@ SEPS_get_full_doc_text.name = "SEPS_Get_Full_Doc_Text"
 
 JACSKE_database_search: BaseTool = tool(JACSKE_database_search_func)
 JACSKE_database_search.name = "JACSKE_Database_Search" 
+JACSKE_database_search.description = "Performs semantic search across SKE documentation." 
 
 JACSKE_get_full_doc_text: BaseTool = tool(JACSKE_get_full_doc_text_func)
 JACSKE_get_full_doc_text.name = "JACSKE_Get_Full_Doc_Text"
+JACSKE_get_full_doc_text.description = """\
+Retrieves up to 15 pages of a document by its exact filename (e.g., 'HDD22011390.docx') and a target page number.
+    - If page_number ≤ 10, it returns pages 1 through 15.
+    - If page_number > 10, it returns pages from page_number - 7 to page_number + 7.\
+"""
