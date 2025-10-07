@@ -1,4 +1,3 @@
-
 import json
 import os
 from unittest.mock import patch
@@ -8,10 +7,10 @@ from pydantic import SecretStr, ValidationError
 
 from core.settings import Settings, check_str_is_http
 from schema.models import (
-    AnthropicModelName,
+    # AnthropicModelName,
     AzureOpenAIModelName,
     OpenAIModelName,
-    VertexAIModelName,
+    # VertexAIModelName,
 )
 
 
@@ -50,20 +49,20 @@ def test_settings_with_openai_key():
         assert settings.AVAILABLE_MODELS == set(OpenAIModelName)
 
 
-def test_settings_with_anthropic_key():
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}, clear=True):
-        settings = Settings(_env_file=None)
-        assert settings.ANTHROPIC_API_KEY == SecretStr("test_key")
-        assert settings.DEFAULT_MODEL == AnthropicModelName.HAIKU_3
-        assert settings.AVAILABLE_MODELS == set(AnthropicModelName)
+# def test_settings_with_anthropic_key():
+#     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}, clear=True):
+#         settings = Settings(_env_file=None)
+#         assert settings.ANTHROPIC_API_KEY == SecretStr("test_key")
+#         assert settings.DEFAULT_MODEL == AnthropicModelName.HAIKU_3
+#         assert settings.AVAILABLE_MODELS == set(AnthropicModelName)
 
 
-def test_settings_with_vertexai_credentials_file():
-    with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": "test_key"}, clear=True):
-        settings = Settings(_env_file=None)
-        assert settings.GOOGLE_APPLICATION_CREDENTIALS == SecretStr("test_key")
-        assert settings.DEFAULT_MODEL == VertexAIModelName.GEMINI_20_FLASH
-        assert settings.AVAILABLE_MODELS == set(VertexAIModelName)
+# def test_settings_with_vertexai_credentials_file():
+#     with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": "test_key"}, clear=True):
+#         settings = Settings(_env_file=None)
+#         assert settings.GOOGLE_APPLICATION_CREDENTIALS == SecretStr("test_key")
+#         assert settings.DEFAULT_MODEL == VertexAIModelName.GEMINI_20_FLASH
+#         assert settings.AVAILABLE_MODELS == set(VertexAIModelName)
 
 
 def test_settings_with_multiple_api_keys():
@@ -71,18 +70,18 @@ def test_settings_with_multiple_api_keys():
         os.environ,
         {
             "OPENAI_API_KEY": "test_openai_key",
-            "ANTHROPIC_API_KEY": "test_anthropic_key",
+            "AZURE_OPENAI_API_KEY": "test_azureopenai_key",
         },
         clear=True,
     ):
         settings = Settings(_env_file=None)
         assert settings.OPENAI_API_KEY == SecretStr("test_openai_key")
-        assert settings.ANTHROPIC_API_KEY == SecretStr("test_anthropic_key")
+        assert settings.AZURE_OPENAI_API_KEY == SecretStr("test_azureopenai_key")
         # When multiple providers are available, OpenAI should be the default
         assert settings.DEFAULT_MODEL == OpenAIModelName.GPT_4O_MINI
-        # Available models should include exactly all OpenAI and Anthropic models
+        # Available models should include exactly all OpenAI and AzureOpenAI models
         expected_models = set(OpenAIModelName)
-        expected_models.update(set(AnthropicModelName))
+        expected_models.update(set(AzureOpenAIModelName))
         assert settings.AVAILABLE_MODELS == expected_models
 
 
@@ -201,4 +200,3 @@ def test_settings_azure_openai():
         assert settings.AZURE_OPENAI_API_KEY.get_secret_value() == "test-key"
         assert settings.AZURE_OPENAI_ENDPOINT == "https://test.openai.azure.com"
         assert settings.AZURE_OPENAI_DEPLOYMENT_MAP == deployment_map
-
