@@ -3,6 +3,8 @@ from enum import StrEnum
 from json import loads
 from typing import Annotated, Any, List
 
+from pathlib import Path
+
 from functools import lru_cache
 
 from dotenv import find_dotenv
@@ -18,19 +20,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from schema.models import (
     AllModelEnum,
-    AnthropicModelName,
-    AWSModelName,
+    # AnthropicModelName,
+    # AWSModelName,
     AzureOpenAIModelName,
-    DeepseekModelName,
+    # DeepseekModelName,
     FakeModelName,
-    GoogleModelName,
+    # GoogleModelName,
     GroqModelName,
     OllamaModelName,
-    OpenAICompatibleName,
+    # OpenAICompatibleName,
     OpenAIModelName,
-    OpenRouterModelName,
+    # OpenRouterModelName,
     Provider,
-    VertexAIModelName,
+    # VertexAIModelName,
 )
 
 
@@ -71,16 +73,16 @@ class Settings(BaseSettings):
     # ——
 
     OPENAI_API_KEY: SecretStr | None = None
-    DEEPSEEK_API_KEY: SecretStr | None = None
-    ANTHROPIC_API_KEY: SecretStr | None = None
-    GOOGLE_API_KEY: SecretStr | None = None
-    GOOGLE_APPLICATION_CREDENTIALS: SecretStr | None = None
+    # DEEPSEEK_API_KEY: SecretStr | None = None
+    # ANTHROPIC_API_KEY: SecretStr | None = None
+    # GOOGLE_API_KEY: SecretStr | None = None
+    # GOOGLE_APPLICATION_CREDENTIALS: SecretStr | None = None
     GROQ_API_KEY: SecretStr | None = None
-    USE_AWS_BEDROCK: bool = False
+    # USE_AWS_BEDROCK: bool = False
     OLLAMA_MODEL: str | None = None
     OLLAMA_BASE_URL: str | None = None
     USE_FAKE_MODEL: bool = False
-    OPENROUTER_API_KEY: str | None = None
+    # OPENROUTER_API_KEY: str | None = None
 
     # If DEFAULT_MODEL is None, it will be set in model_post_init
     DEFAULT_MODEL: AllModelEnum | None = None  # type: ignore[assignment]
@@ -142,20 +144,45 @@ class Settings(BaseSettings):
     # LLM Settings
     TEMPERATURE: float = 0.05
 
+
+    # -- Uploads --
+    UPLOAD_DIR: str = "./uploads"
+    MAX_UPLOAD_MB: int = 100
+    ALLOWED_MIME_TYPES: set[str] = {
+        # docs
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        # images
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        # code-ish
+        "application/x-python-code",
+    }
+    AUTO_INGEST_UPLOADS: bool = False
+
+
+
     def model_post_init(self, __context: Any) -> None:
         api_keys = {
             Provider.OPENAI: self.OPENAI_API_KEY,
-            Provider.OPENAI_COMPATIBLE: self.COMPATIBLE_BASE_URL and self.COMPATIBLE_MODEL,
-            Provider.DEEPSEEK: self.DEEPSEEK_API_KEY,
-            Provider.ANTHROPIC: self.ANTHROPIC_API_KEY,
-            Provider.GOOGLE: self.GOOGLE_API_KEY,
-            Provider.VERTEXAI: self.GOOGLE_APPLICATION_CREDENTIALS,
+            # Provider.OPENAI_COMPATIBLE: self.COMPATIBLE_BASE_URL and self.COMPATIBLE_MODEL,
+            # Provider.DEEPSEEK: self.DEEPSEEK_API_KEY,
+            # Provider.ANTHROPIC: self.ANTHROPIC_API_KEY,
+            # Provider.GOOGLE: self.GOOGLE_API_KEY,
+            # Provider.VERTEXAI: self.GOOGLE_APPLICATION_CREDENTIALS,
             Provider.GROQ: self.GROQ_API_KEY,
-            Provider.AWS: self.USE_AWS_BEDROCK,
+            # Provider.AWS: self.USE_AWS_BEDROCK,
             Provider.OLLAMA: self.OLLAMA_MODEL,
             Provider.FAKE: self.USE_FAKE_MODEL,
             Provider.AZURE_OPENAI: self.AZURE_OPENAI_API_KEY,
-            Provider.OPENROUTER: self.OPENROUTER_API_KEY,
+            # Provider.OPENROUTER: self.OPENROUTER_API_KEY,
         }
         active_keys = [k for k, v in api_keys.items() if v]
         if not active_keys:
@@ -167,42 +194,42 @@ class Settings(BaseSettings):
                     if self.DEFAULT_MODEL is None:
                         self.DEFAULT_MODEL = OpenAIModelName.GPT_4O_MINI
                     self.AVAILABLE_MODELS.update(set(OpenAIModelName))
-                case Provider.OPENAI_COMPATIBLE:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = OpenAICompatibleName.OPENAI_COMPATIBLE
-                    self.AVAILABLE_MODELS.update(set(OpenAICompatibleName))
-                case Provider.DEEPSEEK:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = DeepseekModelName.DEEPSEEK_CHAT
-                    self.AVAILABLE_MODELS.update(set(DeepseekModelName))
-                case Provider.ANTHROPIC:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = AnthropicModelName.HAIKU_3
-                    self.AVAILABLE_MODELS.update(set(AnthropicModelName))
-                case Provider.GOOGLE:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = GoogleModelName.GEMINI_20_FLASH
-                    self.AVAILABLE_MODELS.update(set(GoogleModelName))
-                case Provider.VERTEXAI:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = VertexAIModelName.GEMINI_20_FLASH
-                    self.AVAILABLE_MODELS.update(set(VertexAIModelName))
+                # case Provider.OPENAI_COMPATIBLE:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = OpenAICompatibleName.OPENAI_COMPATIBLE
+                #     self.AVAILABLE_MODELS.update(set(OpenAICompatibleName))
+                # case Provider.DEEPSEEK:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = DeepseekModelName.DEEPSEEK_CHAT
+                #     self.AVAILABLE_MODELS.update(set(DeepseekModelName))
+                # case Provider.ANTHROPIC:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = AnthropicModelName.HAIKU_3
+                #     self.AVAILABLE_MODELS.update(set(AnthropicModelName))
+                # case Provider.GOOGLE:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = GoogleModelName.GEMINI_20_FLASH
+                #     self.AVAILABLE_MODELS.update(set(GoogleModelName))
+                # case Provider.VERTEXAI:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = VertexAIModelName.GEMINI_20_FLASH
+                #     self.AVAILABLE_MODELS.update(set(VertexAIModelName))
                 case Provider.GROQ:
                     if self.DEFAULT_MODEL is None:
                         self.DEFAULT_MODEL = GroqModelName.LLAMA_31_8B
                     self.AVAILABLE_MODELS.update(set(GroqModelName))
-                case Provider.AWS:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = AWSModelName.BEDROCK_HAIKU
-                    self.AVAILABLE_MODELS.update(set(AWSModelName))
+                # case Provider.AWS:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = AWSModelName.BEDROCK_HAIKU
+                #     self.AVAILABLE_MODELS.update(set(AWSModelName))
                 case Provider.OLLAMA:
                     if self.DEFAULT_MODEL is None:
                         self.DEFAULT_MODEL = OllamaModelName.OLLAMA_GENERIC
                     self.AVAILABLE_MODELS.update(set(OllamaModelName))
-                case Provider.OPENROUTER:
-                    if self.DEFAULT_MODEL is None:
-                        self.DEFAULT_MODEL = OpenRouterModelName.GEMINI_25_FLASH
-                    self.AVAILABLE_MODELS.update(set(OpenRouterModelName))
+                # case Provider.OPENROUTER:
+                #     if self.DEFAULT_MODEL is None:
+                #         self.DEFAULT_MODEL = OpenRouterModelName.GEMINI_25_FLASH
+                #     self.AVAILABLE_MODELS.update(set(OpenRouterModelName))
                 case Provider.FAKE:
                     if self.DEFAULT_MODEL is None:
                         self.DEFAULT_MODEL = FakeModelName.FAKE
@@ -253,6 +280,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# ensure upload root exists eagerly
+Path(settings.UPLOAD_DIR).resolve().mkdir(parents=True, exist_ok=True)
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:  # pragma: no cover
