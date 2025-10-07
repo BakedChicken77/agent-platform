@@ -2,19 +2,84 @@ FROM python:3.12.3-slim
 
 WORKDIR /app
 
-ENV UV_PROJECT_ENVIRONMENT="/usr/local/"
-ENV UV_COMPILE_BYTECODE=1
-
+# 1) Bring in manifests early for caching
 COPY pyproject.toml .
 COPY uv.lock .
-RUN pip install --no-cache-dir uv
-RUN uv sync --frozen --no-install-project --no-dev
+COPY README.md .           
 
-COPY src/agents/ ./agents/
-COPY src/core/ ./core/
-COPY src/memory/ ./memory/
-COPY src/schema/ ./schema/
-COPY src/service/ ./service/
-COPY src/run_service.py .
+# 2) Install uv and lockfile deps ONLY (no project yet) for better caching
+RUN pip install --no-cache-dir uv \
+ && uv sync --frozen --no-install-project --no-dev
 
-CMD ["python", "run_service.py"]
+# 3) Now copy the actual source tree exactly as setuptools expects
+#    Your pyproject says where=["src"], so we must create /app/src
+COPY src/ ./src/
+
+# (Optional) If you need non-code assets:
+COPY workflow_diagrams ./workflow_diagrams
+COPY pythonrepl_sandbox ./pythonrepl_sandbox
+
+# 4) Install the project (editable or regular)
+# Editable install (dev-like):
+# RUN uv pip install -e .
+# or non-editable (pinned wheel/sdist):
+RUN uv pip install .
+
+# Build-time args (populated via --build-arg ...)
+ARG AZURE_AD_API_CLIENT_ID
+ARG AZURE_AD_API_SECRET
+ARG AZURE_AD_CLIENT_ID
+ARG AZURE_AD_CLIENT_SECRET
+ARG AZURE_AD_TENANT_ID
+ARG AZURE_OPENAI_API_KEY
+ARG PGVECTOR_URL
+ARG POSTGRES_HOST
+ARG POSTGRES_PASSWORD
+ARG POSTGRES_USER
+ARG AGENT_URL
+ARG AUTH_ENABLED
+ARG AZURE_OPENAI_API_VERSION
+ARG AZURE_OPENAI_DEPLOYMENT_MAP
+ARG AZURE_OPENAI_ENDPOINT
+ARG DATABASE_TYPE
+ARG GHCR_IMAGE_TAG
+ARG HOST
+ARG PORT
+ARG POSTGRES_DB
+ARG POSTGRES_PORT
+ARG PYTHONPATH
+ARG STREAMLIT_APP_URL
+ARG STREAMLIT_REDIRECT_URI
+ARG TEMPERATURE
+
+# --- Runtime environment variables ---
+ENV AZURE_AD_API_CLIENT_ID=$AZURE_AD_API_CLIENT_ID \
+    AZURE_AD_API_SECRET=$AZURE_AD_API_SECRET \
+    AZURE_AD_CLIENT_ID=$AZURE_AD_CLIENT_ID \
+    AZURE_AD_CLIENT_SECRET=$AZURE_AD_CLIENT_SECRET \
+    AZURE_AD_TENANT_ID=$AZURE_AD_TENANT_ID \
+    AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY \
+    PGVECTOR_URL=$PGVECTOR_URL \
+    POSTGRES_HOST=$POSTGRES_HOST \
+    POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+    POSTGRES_USER=$POSTGRES_USER \
+    AGENT_URL=$AGENT_URL \
+    AUTH_ENABLED=$AUTH_ENABLED \
+    AZURE_OPENAI_API_VERSION=$AZURE_OPENAI_API_VERSION \
+    AZURE_OPENAI_DEPLOYMENT_MAP=$AZURE_OPENAI_DEPLOYMENT_MAP \
+    AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT \
+    DATABASE_TYPE=$DATABASE_TYPE \
+    GHCR_IMAGE_TAG=$GHCR_IMAGE_TAG \
+    HOST=$HOST \
+    PORT=$PORT \
+    POSTGRES_DB=$POSTGRES_DB \
+    POSTGRES_PORT=$POSTGRES_PORT \
+    PYTHONPATH=$PYTHONPATH \
+    STREAMLIT_APP_URL=$STREAMLIT_APP_URL \
+    STREAMLIT_REDIRECT_URI=$STREAMLIT_REDIRECT_URI \
+    TEMPERATURE=$TEMPERATURE
+
+# 5) Final command
+
+CMD ["uv", "run", "python", "src/run_service.py"]
+# CMD ["tail", "-f", "/dev/null"]
