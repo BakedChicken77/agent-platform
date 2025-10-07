@@ -91,7 +91,7 @@ safe_globals = {
     "matplotlib": matplotlib
 
 }
-repl = PythonREPL(_globals=safe_globals, _locals={})
+repl = PythonREPL(globals=safe_globals)
 
 
 @tool
