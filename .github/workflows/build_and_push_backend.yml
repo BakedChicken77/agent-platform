@@ -1,0 +1,155 @@
+name: Build & Push Agent Platform Backend Image
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "docker/Dockerfile.service"
+      - ".github/workflows/build_and_push_backend.yml"
+      - "src/**"
+      - "pyproject.toml"
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    environment: Agent-Platform
+    runs-on: [self-hosted, Linux, Docker]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        run: |
+          docker buildx version || true
+          docker buildx create --use --config /etc/buildkit.toml || true
+          docker buildx inspect --bootstrap
+
+      - name: Docker ready?
+        run: |
+          docker version
+          docker buildx inspect --bootstrap
+
+      - name: Logout any cached creds
+        run: |
+          docker logout containers.github.com || true
+          docker logout https://containers.github.com || true
+
+      - name: Login to GHES registry with PAT (primary)
+        env:
+          GHE_PAT: ${{ secrets.GHE_PAT }}
+        run: |
+          test -n "$GHE_PAT" || { echo "GHE_PAT secret is empty"; exit 1; }
+          echo "$GHE_PAT" | docker login containers.github.com -u "Steve-Long" --password-stdin
+
+      # compute metadata once and export to $GITHUB_ENV
+      - name: Compute build metadata
+        env:
+          GHCR_IMAGE_TAG_BACKEND: ${{ vars.GHCR_IMAGE_TAG_BACKEND }}
+        run: |
+          echo "GIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "GIT_SHA_SHORT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=containers.github.com/${GHCR_IMAGE_TAG_BACKEND}" >> "$GITHUB_ENV"
+
+      - name: Aggressive cleanup (pre)
+        run: |
+          docker ps -aq | xargs -r docker rm -f
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          docker buildx prune -af || true
+          find "${RUNNER_WORKSPACE:-/data/actions-runner/_work}" -mindepth 1 -maxdepth 1 \
+            ! -path "${GITHUB_WORKSPACE}" -exec rm -rf {} + || true
+          find /data/actions-runner/_diag -type f -mtime +7 -delete || true
+
+
+      - name: Build and push image
+        env:
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          export BUILDX_NO_DEFAULT_ATTESTATIONS=1
+          docker buildx build \
+            --platform linux/amd64 \
+            --cache-from=type=registry,ref=${IMAGE_NAME}:buildcache \
+            --cache-to=type=registry,ref=${IMAGE_NAME}:buildcache,mode=max \
+            --provenance=false \
+            --sbom=false \
+            --build-arg BUILD_SHA="${GIT_SHA}" \
+            --build-arg BUILD_SHA_SHORT="${GIT_SHA_SHORT}" \
+            --build-arg BUILD_DATE="${BUILD_DATE}" \
+            --label org.opencontainers.image.revision="${GIT_SHA}" \
+            --label org.opencontainers.image.created="${BUILD_DATE}" \
+            --label org.opencontainers.image.version="${GIT_SHA_SHORT}" \
+            --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t ${IMAGE_NAME}:${SHA_TAG} \
+            -t ${IMAGE_NAME}:latest \
+            --build-arg AZURE_AD_API_CLIENT_ID='${{ secrets.AZURE_AD_API_CLIENT_ID }}' \
+            --build-arg AZURE_AD_API_SECRET='${{ secrets.AZURE_AD_API_SECRET }}' \
+            --build-arg AZURE_AD_CLIENT_ID='${{ secrets.AZURE_AD_CLIENT_ID }}' \
+            --build-arg AZURE_AD_CLIENT_SECRET='${{ secrets.AZURE_AD_CLIENT_SECRET }}' \
+            --build-arg AZURE_AD_TENANT_ID='${{ secrets.AZURE_AD_TENANT_ID }}' \
+            --build-arg AZURE_OPENAI_API_KEY='${{ secrets.AZURE_OPENAI_API_KEY }}' \
+            --build-arg PGVECTOR_URL='${{ secrets.PGVECTOR_URL }}' \
+            --build-arg POSTGRES_HOST='${{ secrets.POSTGRES_HOST }}' \
+            --build-arg POSTGRES_PASSWORD='${{ secrets.POSTGRES_PASSWORD }}' \
+            --build-arg POSTGRES_USER='${{ secrets.POSTGRES_USER }}' \
+            --build-arg AGENT_URL='${{ vars.AGENT_URL }}' \
+            --build-arg AUTH_ENABLED='${{ vars.AUTH_ENABLED }}' \
+            --build-arg AZURE_OPENAI_API_VERSION='${{ vars.AZURE_OPENAI_API_VERSION }}' \
+            --build-arg AZURE_OPENAI_DEPLOYMENT_MAP='${{ vars.AZURE_OPENAI_DEPLOYMENT_MAP }}' \
+            --build-arg AZURE_OPENAI_ENDPOINT='${{ vars.AZURE_OPENAI_ENDPOINT }}' \
+            --build-arg DATABASE_TYPE='${{ vars.DATABASE_TYPE }}' \
+            --build-arg GHCR_IMAGE_TAG='${{ vars.GHCR_IMAGE_TAG_BACKEND }}' \
+            --build-arg HOST='${{ vars.HOST }}' \
+            --build-arg PORT='${{ vars.PORT }}' \
+            --build-arg POSTGRES_DB='${{ vars.POSTGRES_DB }}' \
+            --build-arg POSTGRES_PORT='${{ vars.POSTGRES_PORT }}' \
+            --build-arg PYTHONPATH='${{ vars.PYTHONPATH }}' \
+            --build-arg STREAMLIT_APP_URL='${{ vars.STREAMLIT_APP_URL }}' \
+            --build-arg STREAMLIT_REDIRECT_URI='${{ vars.STREAMLIT_REDIRECT_URI }}' \
+            --build-arg TEMPERATURE='${{ vars.TEMPERATURE }}' \
+            --push \
+            --output=type=registry,oci-mediatypes=false \
+            -f ./docker/Dockerfile.service .
+
+
+      - name: Trigger Azure Web App pull (Kudu registry webhook)
+        if: ${{ success() }}
+        env:
+          KUDU_USER: ${{ vars.WEBAPP_WEBHOOK_USER_BACKEND }}
+          KUDU_PASS: ${{ secrets.WEBAPP_WEBHOOK_PASS_BACKEND }}
+          KUDU_BASE: ${{ vars.WEBAPP_WEBHOOK_BASE_BACKEND }}
+        run: |
+          KUDU_BASE="${KUDU_BASE%/}"
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -sS --connect-timeout 5 --max-time 20 \
+              -u "$KUDU_USER:$KUDU_PASS" \
+              -H "Content-Type: application/json" \
+              -X POST "$KUDU_BASE/api/registry/webhook" \
+              -d '{}' \
+              -o /tmp/kudu_resp.json \
+              -w "%{http_code}" || echo "000")
+            echo "Kudu responded with HTTP $HTTP_CODE"
+            if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+              echo "Webhook accepted:"; cat /tmp/kudu_resp.json || true
+              exit 0
+            fi
+            echo "Webhook attempt $i failed (HTTP $HTTP_CODE):"
+            cat /tmp/kudu_resp.json || true
+            sleep $((i*5))
+          done
+          echo "Failed to trigger Kudu webhook after retries" >&2
+          exit 1
+
+      - name: Aggressive cleanup (post)
+        if: always()
+        run: |
+          docker ps -aq | xargs -r docker rm -f
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          docker buildx prune -af || true
+          find "${RUNNER_WORKSPACE:-/data/actions-runner/_work}" -mindepth 1 -maxdepth 1 \
+            ! -path "${GITHUB_WORKSPACE}" -exec rm -rf {} + || true
+          find /data/actions-runner/_diag -type f -mtime +7 -delete || true
