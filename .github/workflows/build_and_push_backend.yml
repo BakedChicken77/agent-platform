@@ -40,9 +40,10 @@ jobs:
       - name: Login to GHES registry with PAT (primary)
         env:
           GHE_PAT: ${{ secrets.GHE_PAT }}
+          GHE_USER: ${{ secrets.GHE_USER }}
         run: |
           test -n "$GHE_PAT" || { echo "GHE_PAT secret is empty"; exit 1; }
-          echo "$GHE_PAT" | docker login containers.github.com -u "Steve-Long" --password-stdin
+          echo "$GHE_PAT" | docker login containers.github.com -u "$GHE_USER" --password-stdin
 
       # compute metadata once and export to $GITHUB_ENV
       - name: Compute build metadata
