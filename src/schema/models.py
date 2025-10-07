@@ -1,20 +1,19 @@
-
 from enum import StrEnum, auto
 from typing import TypeAlias
 
 
 class Provider(StrEnum):
     OPENAI = auto()
-    OPENAI_COMPATIBLE = auto()
+    # OPENAI_COMPATIBLE = auto()
     AZURE_OPENAI = auto()
-    DEEPSEEK = auto()
-    ANTHROPIC = auto()
-    GOOGLE = auto()
-    VERTEXAI = auto()
+    # DEEPSEEK = auto()
+    # ANTHROPIC = auto()
+    # GOOGLE = auto()
+    # VERTEXAI = auto()
     GROQ = auto()
-    AWS = auto()
+    # AWS = auto()
     OLLAMA = auto()
-    OPENROUTER = auto()
+    # OPENROUTER = auto()
     FAKE = auto()
 
 
@@ -32,38 +31,38 @@ class AzureOpenAIModelName(StrEnum):
     AZURE_GPT_4O_MINI = "gpt-4o-mini"
 
 
-class DeepseekModelName(StrEnum):
-    """https://api-docs.deepseek.com/quick_start/pricing"""
+# class DeepseekModelName(StrEnum):
+#     """https://api-docs.deepseek.com/quick_start/pricing"""
 
-    DEEPSEEK_CHAT = "deepseek-chat"
-
-
-class AnthropicModelName(StrEnum):
-    """https://docs.anthropic.com/en/docs/about-claude/models#model-names"""
-
-    HAIKU_3 = "claude-3-haiku"
-    HAIKU_35 = "claude-3.5-haiku"
-    SONNET_35 = "claude-3.5-sonnet"
+#     DEEPSEEK_CHAT = "deepseek-chat"
 
 
-class GoogleModelName(StrEnum):
-    """https://ai.google.dev/gemini-api/docs/models/gemini"""
+# class AnthropicModelName(StrEnum):
+#     """https://docs.anthropic.com/en/docs/about-claude/models#model-names"""
 
-    GEMINI_15_PRO = "gemini-1.5-pro"
-    GEMINI_20_FLASH = "gemini-2.0-flash"
-    GEMINI_20_FLASH_LITE = "gemini-2.0-flash-lite"
-    GEMINI_25_FLASH = "gemini-2.5-flash"
-    GEMINI_25_PRO = "gemini-2.5-pro"
+#     HAIKU_3 = "claude-3-haiku"
+#     HAIKU_35 = "claude-3.5-haiku"
+#     SONNET_35 = "claude-3.5-sonnet"
 
 
-class VertexAIModelName(StrEnum):
-    """https://cloud.google.com/vertex-ai/generative-ai/docs/models"""
+# class GoogleModelName(StrEnum):
+#     """https://ai.google.dev/gemini-api/docs/models/gemini"""
 
-    GEMINI_15_PRO = "gemini-1.5-pro"
-    GEMINI_20_FLASH = "gemini-2.0-flash"
-    GEMINI_20_FLASH_LITE = "models/gemini-2.0-flash-lite"
-    GEMINI_25_FLASH = "models/gemini-2.5-flash"
-    GEMINI_25_PRO = "gemini-2.5-pro"
+#     GEMINI_15_PRO = "gemini-1.5-pro"
+#     GEMINI_20_FLASH = "gemini-2.0-flash"
+#     GEMINI_20_FLASH_LITE = "gemini-2.0-flash-lite"
+#     GEMINI_25_FLASH = "gemini-2.5-flash"
+#     GEMINI_25_PRO = "gemini-2.5-pro"
+
+
+# class VertexAIModelName(StrEnum):
+#     """https://cloud.google.com/vertex-ai/generative-ai/docs/models"""
+
+#     GEMINI_15_PRO = "gemini-1.5-pro"
+#     GEMINI_20_FLASH = "gemini-2.0-flash"
+#     GEMINI_20_FLASH_LITE = "models/gemini-2.0-flash-lite"
+#     GEMINI_25_FLASH = "models/gemini-2.5-flash"
+#     GEMINI_25_PRO = "gemini-2.5-pro"
 
 
 class GroqModelName(StrEnum):
@@ -75,11 +74,11 @@ class GroqModelName(StrEnum):
     LLAMA_GUARD_4_12B = "meta-llama/llama-guard-4-12b"
 
 
-class AWSModelName(StrEnum):
-    """https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"""
+# class AWSModelName(StrEnum):
+#     """https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"""
 
-    BEDROCK_HAIKU = "bedrock-3.5-haiku"
-    BEDROCK_SONNET = "bedrock-3.5-sonnet"
+#     BEDROCK_HAIKU = "bedrock-3.5-haiku"
+#     BEDROCK_SONNET = "bedrock-3.5-sonnet"
 
 
 class OllamaModelName(StrEnum):
@@ -88,16 +87,16 @@ class OllamaModelName(StrEnum):
     OLLAMA_GENERIC = "ollama"
 
 
-class OpenRouterModelName(StrEnum):
-    """https://openrouter.ai/models"""
+# class OpenRouterModelName(StrEnum):
+#     """https://openrouter.ai/models"""
 
-    GEMINI_25_FLASH = "google/gemini-2.5-flash"
+#     GEMINI_25_FLASH = "google/gemini-2.5-flash"
 
 
-class OpenAICompatibleName(StrEnum):
-    """https://platform.openai.com/docs/guides/text-generation"""
+# class OpenAICompatibleName(StrEnum):
+#     """https://platform.openai.com/docs/guides/text-generation"""
 
-    OPENAI_COMPATIBLE = "openai-compatible"
+#     OPENAI_COMPATIBLE = "openai-compatible"
 
 
 class FakeModelName(StrEnum):
@@ -108,16 +107,15 @@ class FakeModelName(StrEnum):
 
 AllModelEnum: TypeAlias = (
     OpenAIModelName
-    | OpenAICompatibleName
+    # | OpenAICompatibleName
     | AzureOpenAIModelName
-    | DeepseekModelName
-    | AnthropicModelName
-    | GoogleModelName
-    | VertexAIModelName
-    | GroqModelName
-    | AWSModelName
+    # | DeepseekModelName
+    # | AnthropicModelName
+    # | GoogleModelName
+    # | VertexAIModelName
+    # | GroqModelName
+    # | AWSModelName
     | OllamaModelName
-    | OpenRouterModelName
+    # | OpenRouterModelName
     | FakeModelName
 )
-
