@@ -1,4 +1,3 @@
-
 from schema.models import AllModelEnum
 from schema.schema import (
     AgentInfo,
@@ -12,6 +11,9 @@ from schema.schema import (
     UserInput,
 )
 
+from schema.index_context import ProgramContext
+from schema.files import FileMeta, UploadResult, ListFilesResponse
+
 __all__ = [
     "AgentInfo",
     "AllModelEnum",
@@ -23,5 +25,8 @@ __all__ = [
     "FeedbackResponse",
     "ChatHistoryInput",
     "ChatHistory",
+    "ProgramContext",
+    "FileMeta",
+    "UploadResult",
+    "ListFilesResponse",
 ]
-
