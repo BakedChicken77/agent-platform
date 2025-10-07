@@ -1,4 +1,3 @@
-
 """
 Hierarchical Agent Team
 =======================
@@ -57,7 +56,10 @@ def _make_supervisor(llm: ChatOpenAI, members: list[str]):
 
     def _node(state: TeamState) -> Command[Literal[*members, "__end__"]]:
         messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-        choice = llm.with_structured_output(Router).invoke(messages)
+        # choice = llm.with_structured_output(Router).invoke(messages)
+        
+
+        choice = llm.with_structured_output(Router, method="function_calling").invoke(messages)
         goto = choice["next"]
         if goto == "FINISH":
             goto = END
@@ -116,4 +118,4 @@ def _build_team():
 
 
 agent_team = _build_team()
-
+agent_team.name = "agent team"
