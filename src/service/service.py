@@ -1,3 +1,5 @@
+## src/service/service.py
+
 import os
 import inspect
 import json
@@ -41,6 +43,10 @@ from service.utils import (
 from service.auth import verify_jwt
 from auth.middleware import AuthMiddleware
 
+from service.files_router import router as files_router
+from service.storage import ensure_upload_root
+from service import catalog_postgres 
+
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
 
@@ -56,6 +62,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     based on settings.
     """
     try:
+        ensure_upload_root()
+        catalog_postgres.init()   # <-- ensure catalog table/indexes exist
         # Initialize both checkpointer (for short-term memory) and store (for long-term memory)
         async with initialize_database() as saver, initialize_store() as store:
             # Set up both components
@@ -308,10 +316,20 @@ async def message_generator(
                     continue
                 content = remove_tool_calls(msg.content)
                 if content:
-                    # Empty content in the context of OpenAI usually means
-                    # that the model is asking for a tool to be invoked.
-                    # So we only print non-empty content.
-                    yield f"data: {json.dumps({'type': 'token', 'content': convert_message_content_to_string(content)})}\n\n"
+                    text = convert_message_content_to_string(content)
+
+                    # NEW: detect plot payload markers and emit as custom SSE
+                    if text.startswith("PLOTLY_JSON:"):
+                        payload = text[len("PLOTLY_JSON:"):]
+                        yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
+                        continue
+                    if text.startswith("DATA_URI:"):
+                        payload = text[len("DATA_URI:"):]
+                        yield f"data: {json.dumps({'type':'event', 'event':'image', 'content': payload})}\n\n"
+                        continue
+
+                    # default token streaming
+                    yield f"data: {json.dumps({'type':'token', 'content': text})}\n\n"
     except Exception as e:
         logger.error(f"Error in message generator: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
@@ -420,3 +438,4 @@ async def health_check():
 
 
 app.include_router(router)
+app.include_router(files_router, prefix="/files")
