@@ -23,4 +23,4 @@ async def chatbot(
         value={"messages": [response]}, save={"messages": messages + [response]}
     )
 
-chatbot.name = "chatbot"
+chatbot.name = "General Chatbot"
