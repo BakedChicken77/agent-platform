@@ -1,13 +1,13 @@
-# 🧰 AIS Agent Platform
+# 🧰 Agent Platform
 
-[![build status](https://github.drs.com/Steve-Long/Langgraph_Powered_Agent/actions/workflows/test.yml/badge.svg)](https://github.drs.com/Steve-Long/Langgraph_Powered_Agent/actions/workflows/test.yml)
+[![build status](https://github.com/BakedChicken77/agent-platform/actions/workflows/test.yml/badge.svg)](https://github.com/BakedChicken77/agent-platform/actions/workflows/test.yml)
 
 
-A full toolkit for running an AI agent service built with LangGraph, FastAPI and Streamlit.
+A full toolkit for running an AI agent workflows built with LangGraph, FastAPI and Streamlit.
 
 It includes a [LangGraph](https://langchain-ai.github.io/langgraph/) agent, a [FastAPI](https://fastapi.tiangolo.com/) service to serve it, a client to interact with the service, and a [Streamlit](https://streamlit.io/) app that uses the client to provide a chat interface. Data structures and settings are built with [Pydantic](https://github.com/pydantic/pydantic).
 
-This project offers a template for you to easily build and run your own agents using the LangGraph framework. It demonstrates a complete setup from agent definition to user interface, making it easier to get started with LangGraph-based projects by providing a full, robust toolkit.
+This project offers a platform for you to easily build and run your own agents using the LangGraph framework. 
 
 
 
@@ -74,8 +74,8 @@ The repository is structured as follows:
 1. Clone the repository:
 
    ```sh
-   git clone https://github.drs.com/Steve-Long/Langgraph_Powered_Agent.git
-   cd agent-service-toolkit
+   git clone https://github.com/BakedChicken77/agent-platform.git
+   cd agent-platform
    ```
 
 2. Set up environment variables:
@@ -159,11 +159,6 @@ response.pretty_print()
 
 ```
 
-### Development with LangGraph Studio
-
-The agent supports [LangGraph Studio](https://langchain-ai.github.io/langgraph/concepts/langgraph_studio/), the IDE for developing agents in LangGraph.
-
-`langgraph-cli[inmem]` is installed with `uv sync`. You can simply add your `.env` file to the root directory as described above, and then launch LangGraph Studio with `langgraph dev`. Customize `langgraph.json` as needed. See the [local quickstart](https://langchain-ai.github.io/langgraph/cloud/how-tos/studio/quick_start/#local-development-server) to learn more.
 
 ### Local development without Docker
 
@@ -190,15 +185,7 @@ You can also run the agent service and the Streamlit app locally without Docker,
 
 4. Open your browser and navigate to the URL provided by Streamlit (usually `http://localhost:8501`).
 
-## Projects built with or inspired by agent-service-toolkit
 
-The following are a few of the public projects that drew code or inspiration from this repo.
-
-- **[PolyRAG](https://github.com/QuentinFuxa/PolyRAG)** - Extends agent-service-toolkit with RAG capabilities over both PostgreSQL databases and PDF documents.
-- **[alexrisch/agent-web-kit](https://github.com/alexrisch/agent-web-kit)** - A Next.JS frontend for agent-service-toolkit
-- **[raushan-in/dapa](https://github.com/raushan-in/dapa)** - Digital Arrest Protection App (DAPA) enables users to report financial scams and frauds efficiently via a user-friendly platform.
-
-**Please create a pull request editing the README or open a discussion with any new ones to be added!** Would love to include more projects.
 
 ## Contributing
 
