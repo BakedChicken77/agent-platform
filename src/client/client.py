@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import Any, IO
 
 import httpx
 
@@ -369,3 +369,84 @@ class AgentClient:
             raise AgentClientError(f"Error: {e}")
 
         return ChatHistory.model_validate(response.json())
+
+
+    # ---------- Files API ----------
+    def list_files(self, thread_id: str | None = None) -> dict:
+        params = {}
+        if thread_id:
+            params["thread_id"] = thread_id
+        try:
+            r = httpx.get(f"{self.base_url}/files", params=params, headers=self._headers, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError as e:
+            raise AgentClientError(f"List files failed: {e}")
+
+    def download_file(self, file_id: str, thread_id: str | None = None) -> bytes:
+        params = {}
+        if thread_id:
+            params["thread_id"] = thread_id
+        params["download"] = "true"
+        try:
+            r = httpx.get(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=None)
+            r.raise_for_status()
+            return r.content
+        except httpx.HTTPError as e:
+            raise AgentClientError(f"Download failed: {e}")
+
+    def delete_file(self, file_id: str, thread_id: str | None = None) -> None:
+        params = {}
+        if thread_id:
+            params["thread_id"] = thread_id
+        try:
+            r = httpx.delete(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=self.timeout)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            raise AgentClientError(f"Delete failed: {e}")
+
+    def upload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+        """
+        Upload multiple files.
+
+        files: list of tuples (field_name, data_or_stream, mime) where field_name is the original filename.
+        """
+        multipart = []
+        for name, data, mime in files:
+            multipart.append(("files", (name, data, mime or "application/octet-stream")))
+        params = {}
+        if thread_id:
+            params["thread_id"] = thread_id
+        try:
+            r = httpx.post(
+                f"{self.base_url}/files/upload",
+                params=params,
+                files=multipart,
+                headers=self._headers,
+                timeout=None,
+            )
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError as e:
+            raise AgentClientError(f"Upload failed: {e}")
+
+    async def aupload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+        multipart = []
+        for name, data, mime in files:
+            multipart.append(("files", (name, data, mime or "application/octet-stream")))
+        params = {}
+        if thread_id:
+            params["thread_id"] = thread_id
+        async with httpx.AsyncClient() as client:
+            try:
+                r = await client.post(
+                    f"{self.base_url}/files/upload",
+                    params=params,
+                    files=multipart,
+                    headers=self._headers,
+                    timeout=None,
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPError as e:
+                raise AgentClientError(f"Upload failed: {e}")
