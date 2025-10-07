@@ -9,13 +9,79 @@ COPY pyproject.toml .
 COPY uv.lock .
 RUN pip install --no-cache-dir uv
 
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir --upgrade pip \
+#     && pip install --no-cache-dir -r requirements.txt
+
 # Install only the dependencies needed for the client application
 # --frozen: Use exact versions from the lock file
 # --only-group client: Only install dependencies marked as part of the "client" group in pyproject.toml
 RUN uv sync --frozen --only-group client
 
+RUN pip install --no-cache-dir "plotly~=6.2.0"
+
 COPY src/client/ ./client/
 COPY src/schema/ ./schema/
+COPY src/pages/ ./pages/
 COPY src/streamlit_app.py .
+# COPY ./.env .
 
-CMD ["streamlit", "run", "streamlit_app.py"]
+# --- Build arguments (injected at build time) ---
+ARG AZURE_AD_API_CLIENT_ID
+ARG AZURE_AD_API_SECRET
+ARG AZURE_AD_CLIENT_ID
+ARG AZURE_AD_CLIENT_SECRET
+ARG AZURE_AD_TENANT_ID
+ARG AZURE_OPENAI_API_KEY
+ARG PGVECTOR_URL
+ARG POSTGRES_HOST
+ARG POSTGRES_PASSWORD
+ARG POSTGRES_USER
+ARG AGENT_URL
+ARG AUTH_ENABLED
+ARG AZURE_OPENAI_API_VERSION
+ARG AZURE_OPENAI_DEPLOYMENT_MAP
+ARG AZURE_OPENAI_ENDPOINT
+ARG DATABASE_TYPE
+ARG GHCR_IMAGE_TAG
+ARG HOST
+ARG PORT
+ARG POSTGRES_DB
+ARG POSTGRES_PORT
+ARG PYTHONPATH
+ARG STREAMLIT_APP_URL
+ARG STREAMLIT_REDIRECT_URI
+ARG TEMPERATURE
+
+# --- Promote build args to runtime environment variables ---
+ENV AZURE_AD_API_CLIENT_ID=$AZURE_AD_API_CLIENT_ID \
+    AZURE_AD_API_SECRET=$AZURE_AD_API_SECRET \
+    AZURE_AD_CLIENT_ID=$AZURE_AD_CLIENT_ID \
+    AZURE_AD_CLIENT_SECRET=$AZURE_AD_CLIENT_SECRET \
+    AZURE_AD_TENANT_ID=$AZURE_AD_TENANT_ID \
+    AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY \
+    PGVECTOR_URL=$PGVECTOR_URL \
+    POSTGRES_HOST=$POSTGRES_HOST \
+    POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+    POSTGRES_USER=$POSTGRES_USER \
+    AGENT_URL=$AGENT_URL \
+    AUTH_ENABLED=$AUTH_ENABLED \
+    AZURE_OPENAI_API_VERSION=$AZURE_OPENAI_API_VERSION \
+    AZURE_OPENAI_DEPLOYMENT_MAP=$AZURE_OPENAI_DEPLOYMENT_MAP \
+    AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT \
+    DATABASE_TYPE=$DATABASE_TYPE \
+    GHCR_IMAGE_TAG=$GHCR_IMAGE_TAG \
+    HOST=$HOST \
+    PORT=$PORT \
+    POSTGRES_DB=$POSTGRES_DB \
+    POSTGRES_PORT=$POSTGRES_PORT \
+    PYTHONPATH=$PYTHONPATH \
+    STREAMLIT_APP_URL=$STREAMLIT_APP_URL \
+    STREAMLIT_REDIRECT_URI=$STREAMLIT_REDIRECT_URI \
+    TEMPERATURE=$TEMPERATURE
+
+
+#CMD ["streamlit", "run", "streamlit_app.py"]
+ENV PORT=80
+CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true"]
+
