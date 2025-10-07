@@ -13,6 +13,11 @@ from client import AgentClient, AgentClientError
 from schema import ChatHistory, ChatMessage
 from schema.task_data import TaskData, TaskDataStatus
 
+from io import BytesIO
+
+import json
+import plotly.io as pio 
+
 # A Streamlit app for interacting with the langgraph agent via a simple chat interface.
 # The app has three main functions which are all run async:
 #
@@ -43,6 +48,15 @@ msal_app = msal.ConfidentialClientApplication(
     client_credential=CLIENT_SECRET,
 )
 
+# ——— Auth Toggle ———
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
+
+if os.getenv("ST_DEBUGPY","0") == "1":
+    import debugpy
+    debugpy.listen(("0.0.0.0", 5678))
+    print("🔎 debugpy listening on 5678")
+    # debugpy.wait_for_client()  # uncomment to pause on start
+
 def get_or_create_user_id() -> str:
     """Get the user ID from session state or URL parameters, or create a new one if it doesn't exist."""
     # Check if user_id exists in session state
@@ -66,6 +80,71 @@ def get_or_create_user_id() -> str:
 
     return user_id
 
+def render_payload(content: str) -> bool:
+    """
+    Detect and render a plotting payload produced by the coding agent.
+    Returns True if handled, False to let caller fall back to st.write().
+    Supported:
+      - PLOTLY_JSON:<json>
+      - DATA_URI:data:image/png;base64,...
+    """
+    if DEBUG:
+        st.caption("🔎 render_payload called")
+        st.code((content[:2000] if isinstance(content, str) else repr(content)) or "<empty>")
+
+    if not isinstance(content, str) or not content:
+        return False
+
+    if content.startswith("PLOTLY_JSON:"):
+        raw = content[len("PLOTLY_JSON:"):]
+        if DEBUG:
+            st.text(f"🔎 Detected PLOTLY_JSON (len={len(raw)})")
+        try:
+            fig = pio.from_json(raw)
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Failed to parse Plotly JSON: {e}")
+            if DEBUG:
+                st.code(raw[:2000])
+        return True
+
+    if content.startswith("DATA_URI:"):
+        uri = content[len("DATA_URI:"):]
+        if DEBUG:
+            st.text(f"🔎 Detected DATA_URI (len={len(uri)})")
+        st.image(uri, use_column_width=True)
+        return True
+
+    if DEBUG:
+        st.text("🔎 No payload marker matched")
+    return False
+
+
+def write_any(content: str, *, in_status=None):
+    """
+    Try to render a plot payload; otherwise write plain text.
+    If in_status is provided (a status container), write inside it;
+    but plots will render in a normal container just below for visibility.
+    """
+    # Prefer to render plots OUTSIDE status boxes (status can be collapsible/narrow)
+    if isinstance(content, str) and (content.startswith("PLOTLY_JSON:") or content.startswith("DATA_URI:")):
+        # Render below the current chat message (not inside status)
+        holder = st.container()
+        with holder:
+            if not render_payload(content):
+                st.write(content)
+        # If you still want to show a short “Output:” line in the status:
+        if in_status is not None:
+            in_status.write("Output: (rendered below)")
+        return
+
+    # Non-plot text: write where it came from
+    if in_status is not None:
+        in_status.write(content)
+    else:
+        st.write(content)
+
+
 
 async def main() -> None:
     st.set_page_config(
@@ -74,31 +153,85 @@ async def main() -> None:
         menu_items={},
     )
 
-    # ——— Handle OAuth2 redirect & token exchange ———
-    params = st.query_params
-    if "code" in params and "access_token" not in st.session_state:
-        code = params["code"][0]
-        result = msal_app.acquire_token_by_authorization_code(
-            code,
-            scopes=SCOPE,
-            redirect_uri=REDIRECT_URI,
-        )
-        token = result.get("access_token")
-        if not token:
-            st.error("Failed to obtain access token.")
-            return
-        st.session_state["access_token"] = token
-        # clear the code from URL
-        st.experimental_set_query_params()
+    ## Used to not display the 'oauth2callback' tab
+    st.markdown("""
+<style>
+/* Hide oauth2callback from sidebar nav and top tab bar (covers both layouts) */
+section[data-testid="stSidebar"] a[href$="/oauth2callback"],
+section[data-testid="stSidebar"] a[href*="/oauth2callback?"],
+header [data-testid="stAppTabBar"] a[href$="/oauth2callback"],
+header [data-testid="stAppTabBar"] a[href*="/oauth2callback?"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+    
+    ## Used to not display the 'streamlit_app' tab
+    st.markdown("""
+<style>
+/* Hide streamlit_app from sidebar nav and top tab bar (covers both layouts) */
+section[data-testid="stSidebar"] a[href$="/streamlit_app"],
+section[data-testid="stSidebar"] a[href*="/streamlit_app?"],
+header [data-testid="stAppTabBar"] a[href$="/streamlit_app"],
+header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)    
 
-    # ——— Require login if we don’t yet have a token ———
-    if "access_token" not in st.session_state:
-        auth_url = msal_app.get_authorization_request_url(
-            scopes=SCOPE,
-            redirect_uri=REDIRECT_URI,
-        )
-        st.markdown(f"[Sign in with Microsoft]({auth_url})")
-        return  # stop further rendering until signed in
+    # ——— Handle OAuth2 redirect & token exchange ———
+    if AUTH_ENABLED:
+        params = st.query_params
+        if "code" in params and "access_token" not in st.session_state:
+            code = params["code"][0]
+            result = msal_app.acquire_token_by_authorization_code(
+                code,
+                scopes=SCOPE,
+                redirect_uri=REDIRECT_URI,
+            )
+            token = result.get("access_token")
+            if not token:
+                st.error("Failed to obtain access token.")
+                return
+            st.session_state["access_token"] = token
+            # clear the code from URL
+            st.experimental_set_query_params()
+
+        # ——— Require login if we don’t yet have a token ———
+        if "access_token" not in st.session_state:
+            auth_url = msal_app.get_authorization_request_url(
+                scopes=SCOPE,
+                redirect_uri=REDIRECT_URI,
+            )
+            # st.markdown(f"[Sign in with Microsoft]({auth_url})")
+
+
+            # auth_url = msal_app.get_authorization_request_url(
+            #     scopes=SCOPE,
+            #     redirect_uri=REDIRECT_URI,
+            # )
+            # st.html(f'<a href="{auth_url}" target="_self" rel="noopener">Sign in with Microsoft</a>')
+
+
+            auth_url = msal_app.get_authorization_request_url(
+                scopes=SCOPE,
+                redirect_uri=REDIRECT_URI,
+            )
+
+            st.markdown(
+                f"""
+                <a href="{auth_url}" target="_self" style="
+                    display: inline-block;
+                    padding: 0.5em 1em;
+                    background-color: #2e6ef7;
+                    color: white;
+                    border-radius: 4px;
+                    text-decoration: none;
+                    font-weight: bold;
+                ">
+                    Sign in with Microsoft
+                </a>
+                """,
+                unsafe_allow_html=True
+            )
+
+            return  # stop further rendering until signed in
 
     # Hide the streamlit upper-right chrome
     st.html(
@@ -124,10 +257,10 @@ async def main() -> None:
         agent_url = os.getenv("AGENT_URL") or f"http://{os.getenv('HOST','0.0.0.0')}:{os.getenv('PORT',8080)}"
         try:
             with st.spinner("Connecting to agent service..."):
-                # Inject access_token during AgentClient construction
+                # Inject access_token only if auth is enabled; otherwise pass None
                 client = AgentClient(
                     base_url=agent_url,
-                    access_token=st.session_state["access_token"]
+                    access_token=st.session_state.get("access_token") if AUTH_ENABLED else None
                 )
                 st.session_state.agent_client = client
         except AgentClientError as e:
@@ -157,13 +290,15 @@ async def main() -> None:
         ""
         "Full toolkit for running an AI agent service built with LangGraph, FastAPI and Streamlit"
         ""
+        DEBUG = st.toggle("🔎 Debug mode", value=False)
+        globals()["DEBUG"] = DEBUG  # <— ADD THIS
 
         if st.button(":material/chat: New Chat", use_container_width=True):
             st.session_state.messages = []
             st.session_state.thread_id = str(uuid.uuid4())
             st.rerun()
 
-        with st.popover(":material/settings: Settings", use_container_width=True):
+        with st.popover(":material/settings: Agents/Workflows", use_container_width=True):
             model_idx = agent_client.info.models.index(agent_client.info.default_model)
             model = st.selectbox("LLM to use", options=agent_client.info.models, index=model_idx)
             agent_list = [a.key for a in agent_client.info.agents]
@@ -190,7 +325,7 @@ async def main() -> None:
         if st.button(":material/schema: Architecture", use_container_width=True):
             architecture_dialog()
 
-        with st.popover(":material/policy: Privacy", use_container_width=True):
+        with st.popover(":material/policy: TBD", use_container_width=True):
             st.write(
                 "TBD"
             )
@@ -214,10 +349,55 @@ async def main() -> None:
         if st.button(":material/upload: Share/resume chat", use_container_width=True):
             share_chat_dialog()
 
-        "[View the source code](https://github.drs.com/AIS-FWB-Engineering/DRS_Agent.git)"
+        "[View the source code](https://github.drs.com/AIS-FWB-Engineering/AIS-Agent-Platform.git)"
         st.caption(
-            "Made with :material/favorite: by [Steve](https://drscom.sharepoint.us/sites/BU03/Dept/Engineering/SitePages/ProjectHome.aspx) for AIS-FWB"
+            "Made with :material/favorite: by [Steve](https://google.com) for you"
         )
+
+        # --- Upload popover ---
+        with st.popover(":material/upload_file: Upload files", use_container_width=True):
+            st.caption("Attach files to this thread (auth required).")
+            up_files = st.file_uploader(
+                "Choose files",
+                type=None,
+                accept_multiple_files=True,
+                key="file_uploader_multi",
+                help="Documents, images, CSV, etc.",
+            )
+            do_ingest = st.toggle("Ingest after upload (if enabled server-side)", value=False, help="Requires server AUTO_INGEST_UPLOADS=True")
+            if st.button("Upload", use_container_width=True, disabled=not up_files):
+                if AUTH_ENABLED and "access_token" not in st.session_state:
+                    st.error("Sign in first.")
+                else:
+                    results_placeholder = st.container()
+                    with results_placeholder:
+                        status_box = st.status("Uploading...", state="running")
+                        # Build payload for client
+                        payload: list[tuple[str, bytes, str | None]] = []
+                        for f in up_files:
+                            payload.append((f.name, f.getvalue(), f.type))
+                        try:
+                            resp = agent_client.upload_files(payload, thread_id=st.session_state.thread_id)
+                            # Render per-file outcomes
+                            for item in resp:
+                                state = item.get("status")
+                                meta = item.get("file")
+                                name = (meta or {}).get("original_name", "unknown")
+                                match state:
+                                    case "stored":
+                                        status_box.write(f"✅ **{name}** — Saved")
+                                        st.toast(f"Saved: {name}", icon="✅")
+                                    case "skipped":
+                                        status_box.write(f"⏭️ **{name}** — {item.get('message','Skipped')}")
+                                        st.toast(f"Skipped: {name}", icon="⏭️")
+                                    case "error":
+                                        status_box.write(f"❌ **{name}** — {item.get('message','Error')}")
+                                        st.toast(f"Failed: {name}", icon="❌")
+                            status_box.update(label="Upload complete", state="complete")
+                        except AgentClientError as e:
+                            status_box.update(label="Upload failed", state="error")
+                            st.error(str(e))
+
 
     # Draw existing messages
     messages: list[ChatMessage] = st.session_state.messages
@@ -306,6 +486,7 @@ async def draw_messages(
     # Keep track of the last message container
     last_message_type = None
     st.session_state.last_message = None
+    streaming_is_payload = False 
 
     # Placeholder for intermediate streaming tokens
     streaming_content = ""
@@ -325,7 +506,25 @@ async def draw_messages(
                     streaming_placeholder = st.empty()
 
             streaming_content += msg
-            streaming_placeholder.write(streaming_content)
+
+            if DEBUG and len(streaming_content) < 300:
+                with st.session_state.last_message:
+                    st.text(f"🔎 token += … now {len(streaming_content)} chars")
+                    st.code(streaming_content)
+
+            if not streaming_is_payload and (
+                streaming_content.startswith("PLOTLY_JSON:") or streaming_content.startswith("DATA_URI:")
+            ):
+                streaming_is_payload = True
+
+                if DEBUG:
+                    with st.session_state.last_message:
+                        st.text("🔎 Detected payload marker during streaming")
+
+            # Only show tokens if it's normal text; hide when it's a plot payload
+            if not streaming_is_payload:
+                streaming_placeholder.write(streaming_content)
+
             continue
         if not isinstance(msg, ChatMessage):
             st.error(f"Unexpected message type: {type(msg)}")
@@ -355,11 +554,16 @@ async def draw_messages(
                     # Reset the streaming variables to prepare for the next message.
                     if msg.content:
                         if streaming_placeholder:
-                            streaming_placeholder.write(msg.content)
+                            streaming_placeholder.empty()
                             streaming_content = ""
                             streaming_placeholder = None
-                        else:
-                            st.write(msg.content)
+
+                        if 'DEBUG' in globals() and DEBUG:
+                            st.caption("🔎 final AI message content")
+                            st.code(msg.content[:4000])
+
+                        write_any(msg.content)
+
 
                     if msg.tool_calls:
                         # Create a status container for each tool call and store the
@@ -380,7 +584,11 @@ async def draw_messages(
                             if "transfer_to" in tool_call["name"]:
                                 await handle_agent_msgs(messages_agen, call_results, is_new)
                                 break
-                            tool_result: ChatMessage =	await anext(messages_agen)
+                            tool_result = await anext(messages_agen, None)
+                            if tool_result is None:
+                                # Stream ended unexpectedly; tidy up and stop gracefully
+                                status.update(state="complete")
+                                break
 
                             if tool_result.type != "tool":
                                 st.error(f"Unexpected ChatMessage type: {tool_result.type}")
@@ -394,7 +602,12 @@ async def draw_messages(
                             if tool_result.tool_call_id:
                                 status = call_results[tool_result.tool_call_id]
                             status.write("Output:")
-                            status.write(tool_result.content)
+                            if DEBUG:
+                                with status:
+                                    st.caption("🔎 tool_result.content")
+                                    st.code(str(tool_result.content)[:4000])
+                            # Single unified writer handles plot vs text
+                            write_any(tool_result.content, in_status=status)
                             status.update(state="complete")
 
             case "custom":
@@ -467,7 +680,11 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
     """
     nested_popovers = {}
     # looking for the Success tool call message
-    first_msg = await anext(messages_agen)
+    first_msg = await anext(messages_agen, None)
+    if first_msg is None:
+        if status:
+            status.update(state="complete")
+        return
     if is_new:
         st.session_state.messages.append(first_msg)
     status = call_results.get(getattr(first_msg, "tool_call_id", None))
@@ -484,7 +701,11 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
                 status.update(state="complete")
             break
         # Read next message
-        sub_msg =	await anext(messages_agen)
+        sub_msg = await anext(messages_agen, None)
+        if sub_msg is None:
+            if status:
+                status.update(state="complete")
+            return
         # this should only happen is skip_stream flag is removed
         # if isinstance(sub_msg, str):
         #     continue
@@ -498,9 +719,16 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
             first_msg = sub_msg
             continue
         # Display content and tool calls using the same status
-        if status:
-            if sub_msg.content:
-                status.write(sub_msg.content)
+        if status and sub_msg.content:
+            # Debug (optional)
+            if 'DEBUG' in globals() and DEBUG:
+                with status:
+                    st.caption("🔎 handle_agent_msgs sub_msg.content")
+                    st.code(str(sub_msg.content)[:4000])
+
+            # Route via universal writer
+            write_any(sub_msg.content, in_status=status)
+
             if hasattr(sub_msg, "tool_calls") and sub_msg.tool_calls:
                 for tc in sub_msg.tool_calls:
                     popover = status.popover(f"{tc['name']}", icon="🛠️")
