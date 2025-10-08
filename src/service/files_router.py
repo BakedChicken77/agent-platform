@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import mimetypes
-import filetype
 import uuid
 from pathlib import Path
 
+import filetype
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from core import settings
+from schema.files import FileMeta, ListFilesResponse, UploadResult
+from service import catalog_postgres as catalog
 from service.storage import (
     build_user_dir,
     is_allowed,
     sha256_streaming,
-    write_stream_atomic_with_limit
-
+    write_stream_atomic_with_limit,
 )
-from schema.files import FileMeta, ListFilesResponse, UploadResult
-from service import catalog_postgres as catalog 
 
 router = APIRouter(tags=["files"])
 
@@ -36,11 +35,18 @@ def sniff_mime_from_upload(uf) -> str:
     # reset pointer so later code can re-read the stream
     uf.file.seek(0)
 
+    ext_mime = mimetypes.guess_type(uf.filename or "")[0]
+
     if kind and kind.mime:
+        if (
+            kind.mime == "application/zip"
+            and ext_mime
+            and ext_mime in settings.ALLOWED_MIME_TYPES
+        ):
+            return ext_mime
         return kind.mime
 
     # fallback to filename extension
-    ext_mime = mimetypes.guess_type(uf.filename or "")[0]
     if ext_mime:
         return ext_mime
 
