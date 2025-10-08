@@ -1,3 +1,4 @@
+import asyncio
 import io
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,10 @@ def sample_excel_file(tmp_path: Path) -> tuple[Path, bytes]:
     return file_path, data
 
 
-def test_python_repl_exposes_uploaded_excel(monkeypatch: Any, sample_excel_file: tuple[Path, bytes]) -> None:
+@pytest.mark.asyncio
+async def test_python_repl_exposes_uploaded_excel(
+    monkeypatch: Any, sample_excel_file: tuple[Path, bytes]
+) -> None:
     file_path, data = sample_excel_file
 
     meta = FileMeta(
@@ -38,29 +42,31 @@ def test_python_repl_exposes_uploaded_excel(monkeypatch: Any, sample_excel_file:
         indexed=False,
     )
 
-    def fake_list_metadata(user_id: str, thread_id: str | None) -> list[FileMeta]:
-        assert user_id == "user-1"
-        assert thread_id == "thread-1"
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_list_metadata(user_id: str, thread_id: str | None) -> list[FileMeta]:
+        calls.append((user_id, thread_id))
+        await asyncio.sleep(0)
         return [meta]
 
     monkeypatch.setattr(coding_agent.catalog_postgres, "list_metadata", fake_list_metadata)
 
     state = {"configurable": {"user_id": "user-1", "thread_id": "thread-1"}}
 
-    result_paths = coding_agent.python_repl.func(
+    result_paths = await coding_agent.python_repl.func(
         "print(sorted(uploaded_file_paths.keys()))",
         state,
     )
     assert "numbers.xlsx" in result_paths
     assert "file-123" in result_paths
 
-    result_metadata = coding_agent.python_repl.func(
+    result_metadata = await coding_agent.python_repl.func(
         "print(list_uploaded_files()[0]['path'])",
         state,
     )
     assert str(file_path) in result_metadata
 
-    analysis_output = coding_agent.python_repl.func(
+    analysis_output = await coding_agent.python_repl.func(
         "\n".join(
             [
                 "buffer = load_uploaded_file('numbers.xlsx')",
@@ -72,3 +78,29 @@ def test_python_repl_exposes_uploaded_excel(monkeypatch: Any, sample_excel_file:
     )
     assert "{'value': 1}" in analysis_output
     assert "{'value': 3}" in analysis_output
+
+    assert calls == [("user-1", "thread-1")]
+
+
+@pytest.mark.asyncio
+async def test_python_repl_matplotlib_backend(monkeypatch: Any) -> None:
+    async def fake_list_metadata(user_id: str, thread_id: str | None) -> list[FileMeta]:
+        return []
+
+    monkeypatch.setattr(coding_agent.catalog_postgres, "list_metadata", fake_list_metadata)
+
+    state = {"configurable": {"user_id": "user-2", "thread_id": "thread-9"}}
+
+    code = "\n".join(
+        [
+            "plt.figure()",
+            "plt.plot([0, 1], [0, 1])",
+            "buf = io.BytesIO()",
+            "plt.savefig(buf, format='png', bbox_inches='tight')",
+            "buf.seek(0)",
+            "print('DATA_URI:data:image/png;base64,' + base64.b64encode(buf.read()).decode())",
+        ]
+    )
+
+    output = await coding_agent.python_repl.func(code, state)
+    assert output.strip().startswith("DATA_URI:data:image/png;base64,")

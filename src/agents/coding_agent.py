@@ -1,12 +1,16 @@
 # coding_agent.py
 
 import base64
+import inspect
 import io
 import math
 from pathlib import Path
 from typing import Annotated, Any
 
 import matplotlib
+
+matplotlib.use("Agg")  # force headless backend
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -20,8 +24,6 @@ from core import get_model, settings
 from langgraph.graph import MessagesState
 from langgraph.prebuilt import InjectedState, create_react_agent
 from service import catalog_postgres
-
-matplotlib.use("Agg")  # force headless backend
 
 # Load environment variables (e.g. OPENAI_API_KEY)
 load_dotenv()
@@ -65,21 +67,24 @@ def _extract_runtime_ids(state: MessagesState | dict[str, Any]) -> tuple[str | N
     return user_id, thread_id
 
 
-def _load_user_uploads(user_id: str | None, thread_id: str | None) -> list[Any]:
+async def _load_user_uploads(user_id: str | None, thread_id: str | None) -> list[Any]:
     if not user_id:
         return []
     try:
-        return catalog_postgres.list_metadata(user_id=user_id, thread_id=thread_id)
+        records = catalog_postgres.list_metadata(user_id=user_id, thread_id=thread_id)
+        if inspect.isawaitable(records):
+            return await records  # type: ignore[return-value]
+        return records
     except Exception:
         return []
 
 
-def _prepare_repl_globals(user_id: str | None, thread_id: str | None) -> dict[str, Any]:
+async def _prepare_repl_globals(user_id: str | None, thread_id: str | None) -> dict[str, Any]:
     context_globals: dict[str, Any] = dict(safe_globals)
     file_map: dict[str, str] = {}
     metadata: list[dict[str, Any]] = []
 
-    for meta in _load_user_uploads(user_id, thread_id):
+    for meta in await _load_user_uploads(user_id, thread_id):
         path_value = getattr(meta, "path", None)
         if not path_value:
             continue
@@ -126,7 +131,7 @@ def _prepare_repl_globals(user_id: str | None, thread_id: str | None) -> dict[st
 
 
 @tool
-def python_repl(
+async def python_repl(
     code: str,
     state: Annotated[MessagesState, InjectedState] | None = None,
 ) -> str:
@@ -137,7 +142,7 @@ def python_repl(
     thread_id: str | None = None
     if state is not None:
         user_id, thread_id = _extract_runtime_ids(state)
-    repl_globals = _prepare_repl_globals(user_id, thread_id)
+    repl_globals = await _prepare_repl_globals(user_id, thread_id)
     repl = PythonREPL(globals=repl_globals)
     try:
         return repl.run(code)
