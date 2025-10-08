@@ -36,16 +36,27 @@ def sniff_mime_from_upload(uf) -> str:
     # reset pointer so later code can re-read the stream
     uf.file.seek(0)
 
-    if kind and kind.mime:
-        return kind.mime
-
-    # fallback to filename extension
     ext_mime = mimetypes.guess_type(uf.filename or "")[0]
+    fallback_mime = uf.content_type or "application/octet-stream"
+
+    if kind and kind.mime:
+        sniffed = kind.mime
+        # Many OpenXML-based formats (xlsx, docx, pptx) share a ZIP signature.
+        # Prefer the extension-derived MIME when the signature is generic so
+        # that legitimate spreadsheets aren't rejected.
+        if (
+            sniffed in {"application/zip", "application/octet-stream"}
+            and ext_mime
+            and ext_mime.startswith("application/vnd.openxmlformats-officedocument")
+        ):
+            return ext_mime
+        return sniffed
+
     if ext_mime:
         return ext_mime
 
     # final fallback to client-provided content_type (untrusted)
-    return uf.content_type or "application/octet-stream"
+    return fallback_mime
 
 
 
