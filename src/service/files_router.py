@@ -1,3 +1,5 @@
+## src/service/files_router.py
+
 from __future__ import annotations
 
 import mimetypes
@@ -13,16 +15,15 @@ from service.storage import (
     build_user_dir,
     is_allowed,
     sha256_streaming,
-    write_stream_atomic_with_limit
-
+    write_stream_atomic_with_limit,
 )
 from schema.files import FileMeta, ListFilesResponse, UploadResult
-from service import catalog_postgres as catalog 
+from service import catalog_postgres as catalog
 
 router = APIRouter(tags=["files"])
 
-
 SNIFF_BYTES = 8192  # read a small header; safe for large files
+
 
 def sniff_mime_from_upload(uf) -> str:
     """
@@ -36,24 +37,38 @@ def sniff_mime_from_upload(uf) -> str:
     # reset pointer so later code can re-read the stream
     uf.file.seek(0)
 
-    if kind and kind.mime:
-        return kind.mime
-
-    # fallback to filename extension
     ext_mime = mimetypes.guess_type(uf.filename or "")[0]
+    fallback_mime = uf.content_type or "application/octet-stream"
+
+    if kind and kind.mime:
+        sniffed = kind.mime
+        # Prefer the extension-derived MIME for OpenXML formats that look like ZIP
+        if (
+            sniffed in {"application/zip", "application/octet-stream"}
+            and ext_mime
+            and ext_mime.startswith("application/vnd.openxmlformats-officedocument")
+        ):
+            return ext_mime
+        return sniffed
+
     if ext_mime:
         return ext_mime
 
     # final fallback to client-provided content_type (untrusted)
-    return uf.content_type or "application/octet-stream"
+    return fallback_mime
 
 
-
-def _get_ids_from_claims(claims: dict) -> tuple[str | None, str]:
-    # Standard Graph token has tenant in "tid"
-    tenant_id = claims.get("tid") or claims.get("tenant_id")
-    user = claims.get("oid") or claims.get("sub") or claims.get("preferred_username") or "unknown"
-    return tenant_id, str(user)
+def _get_user_id_from_claims(claims: dict) -> str:
+    """
+    Extract a stable per-user identifier from JWT claims.
+    We deliberately ignore tenant scoping here to favor (user_id, thread_id) storage.
+    """
+    return str(
+        claims.get("oid")
+        or claims.get("sub")
+        or claims.get("preferred_username")
+        or "unknown"
+    )
 
 
 @router.post("/upload", response_model=list[UploadResult])
@@ -64,11 +79,14 @@ async def upload_files(
 ):
     if not hasattr(request.state, "user"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    tenant_id, user_id = _get_ids_from_claims(request.state.user)
+
+    user_id = _get_user_id_from_claims(request.state.user)
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
-    root = build_user_dir(user_id=user_id, thread_id=thread_id, tenant_id=tenant_id)
+    # Use (user_id, thread_id) for storage partitioning; do not use tenant_id.
+    root = build_user_dir(user_id=user_id, thread_id=thread_id, tenant_id=None)
     results: list[UploadResult] = []
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
 
@@ -83,7 +101,12 @@ async def upload_files(
             # optional strictness: extension vs sniffed MIME family
             ext_mime = mimetypes.guess_type(uf.filename or "")[0]
             if ext_mime and ext_mime.split("/")[0] != mime.split("/")[0]:
-                results.append(UploadResult(status="error", message=f"Extension/MIME mismatch: {ext_mime} vs {mime}"))
+                results.append(
+                    UploadResult(
+                        status="error",
+                        message=f"Extension/MIME mismatch: {ext_mime} vs {mime}",
+                    )
+                )
                 continue
 
             # compute hash for dedup
@@ -92,7 +115,13 @@ async def upload_files(
             # check for existing (same user, thread, sha, name)
             dup = catalog.get_by_sha_and_name(user_id, thread_id, sha, uf.filename or "")
             if dup:
-                results.append(UploadResult(status="skipped", message="Duplicate detected (same name & SHA-256).", file=dup))
+                results.append(
+                    UploadResult(
+                        status="skipped",
+                        message="Duplicate detected (same name & SHA-256).",
+                        file=dup,
+                    )
+                )
                 continue
 
             # write with server-side size enforcement
@@ -102,7 +131,7 @@ async def upload_files(
                 id=file_id,
                 user_id=user_id,
                 thread_id=thread_id,
-                tenant_id=tenant_id,
+                tenant_id=None,  # ← no longer used for partitioning; keep field for schema compatibility
                 original_name=(uf.filename or "file"),
                 mime=mime,
                 size=path.stat().st_size,
@@ -134,17 +163,23 @@ async def upload_files(
 async def list_files(request: Request, thread_id: str | None = None):
     if not hasattr(request.state, "user"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    tenant_id, user_id = _get_ids_from_claims(request.state.user)
 
+    user_id = _get_user_id_from_claims(request.state.user)
     items = catalog.list_metadata(user_id=user_id, thread_id=thread_id)
     return ListFilesResponse(items=items)
 
 
 @router.get("/{file_id}")
-async def get_file(request: Request, file_id: str, thread_id: str | None = None, download: bool = False):
+async def get_file(
+    request: Request,
+    file_id: str,
+    thread_id: str | None = None,
+    download: bool = False,
+):
     if not hasattr(request.state, "user"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    tenant_id, user_id = _get_ids_from_claims(request.state.user)
+
+    user_id = _get_user_id_from_claims(request.state.user)
 
     meta = catalog.get_metadata_by_id(user_id=user_id, file_id=file_id, thread_id=thread_id)
     if not meta:
@@ -164,7 +199,8 @@ async def get_file(request: Request, file_id: str, thread_id: str | None = None,
 async def delete_file(request: Request, file_id: str, thread_id: str | None = None):
     if not hasattr(request.state, "user"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    tenant_id, user_id = _get_ids_from_claims(request.state.user)
+
+    user_id = _get_user_id_from_claims(request.state.user)
 
     meta = catalog.get_metadata_by_id(user_id=user_id, file_id=file_id, thread_id=thread_id)
     if meta:

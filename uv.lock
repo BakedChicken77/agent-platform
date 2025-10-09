@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -70,7 +70,9 @@ dependencies = [
 [package.dev-dependencies]
 client = [
     { name = "httpx" },
+    { name = "matplotlib" },
     { name = "msal" },
+    { name = "plotly" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "streamlit" },
@@ -145,7 +147,9 @@ requires-dist = [
 [package.metadata.requires-dev]
 client = [
     { name = "httpx", specifier = "~=0.27.2" },
+    { name = "matplotlib", specifier = "~=3.10.5" },
     { name = "msal", specifier = "~=1.33.0" },
+    { name = "plotly", specifier = "~=6.2.0" },
     { name = "pydantic", specifier = "~=2.10.1" },
     { name = "python-dotenv", specifier = "~=1.0.1" },
     { name = "streamlit", specifier = "~=1.40.1" },

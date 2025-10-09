@@ -1,3 +1,5 @@
+# src/streamlit_app.py
+
 import asyncio
 import os
 import urllib.parse
@@ -17,6 +19,14 @@ from io import BytesIO
 
 import json
 import plotly.io as pio 
+
+if os.getenv("ST_DEBUGPY", "0") == "1" and os.getenv("DEBUGPY_LAUNCHER_PORT") is None:
+    import debugpy
+    debugpy.listen(("0.0.0.0", 5678))
+    debugpy.wait_for_client()  # optional
+
+
+
 
 # A Streamlit app for interacting with the langgraph agent via a simple chat interface.
 # The app has three main functions which are all run async:
@@ -438,7 +448,7 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
-                    user_id=user_id,
+                    # user_id is no longer sent; identity comes from JWT on the server
                 )
                 await draw_messages(stream, is_new=True)
             else:
@@ -446,7 +456,7 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
-                    user_id=user_id,
+                    # user_id is no longer sent; identity comes from JWT on the server
                 )
                 messages.append(response)
                 st.chat_message("ai").write(response.content)

@@ -49,6 +49,9 @@ def init() -> None:
 
     CREATE INDEX IF NOT EXISTS idx_user_files_user_sha_name
         ON user_files (user_id, sha256, original_name);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_user_thread_sha_name
+        ON user_files (user_id, COALESCE(thread_id, ''), sha256, original_name);
     """
     eng = get_engine()
     with eng.begin() as conn:
@@ -89,65 +92,101 @@ def save_metadata(meta: FileMeta) -> None:
             created_at = EXCLUDED.created_at,
             indexed = EXCLUDED.indexed
     """)
+    params = {
+        "id": meta.id,
+        "user_id": meta.user_id,
+        "thread_id": meta.thread_id,
+        "tenant_id": meta.tenant_id,
+        "original_name": meta.original_name,
+        "mime": meta.mime,
+        "size": int(meta.size),
+        "sha256": meta.sha256,
+        "path": meta.path,                    # ← include explicitly
+        "created_at": int(meta.created_at),
+        "indexed": bool(meta.indexed),
+    }
     eng = get_engine()
     with eng.begin() as conn:
-        conn.execute(q, meta.model_dump())
+        conn.execute(q, params)
 
 
 def get_metadata_by_id(user_id: str, file_id: str, thread_id: str | None = None) -> FileMeta | None:
-    q = text("""
-        SELECT *
-        FROM user_files
-        WHERE user_id = :user_id AND id = :id AND
-              (:thread_id IS NULL OR thread_id = :thread_id)
-        LIMIT 1
-    """)
     eng = get_engine()
     with eng.begin() as conn:
-        row = conn.execute(q, {"user_id": user_id, "id": file_id, "thread_id": thread_id}).mappings().first()
+        if thread_id is None:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id AND id = :id
+                LIMIT 1
+            """)
+            row = conn.execute(q, {"user_id": user_id, "id": file_id}).mappings().first()
+        else:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id AND id = :id AND thread_id = :thread_id
+                LIMIT 1
+            """)
+            row = conn.execute(q, {"user_id": user_id, "id": file_id, "thread_id": thread_id}).mappings().first()
     return _row_to_meta(row) if row else None
 
-
 def list_metadata(user_id: str, thread_id: str | None = None) -> list[FileMeta]:
-    q = text("""
-        SELECT *
-        FROM user_files
-        WHERE user_id = :user_id AND (:thread_id IS NULL OR thread_id = :thread_id)
-        ORDER BY created_at DESC
-    """)
     eng = get_engine()
     with eng.begin() as conn:
-        rows = conn.execute(q, {"user_id": user_id, "thread_id": thread_id}).mappings().all()
+        if thread_id is None:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id
+                ORDER BY created_at DESC
+            """)
+            rows = conn.execute(q, {"user_id": user_id}).mappings().all()
+        else:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id AND thread_id = :thread_id
+                ORDER BY created_at DESC
+            """)
+            rows = conn.execute(q, {"user_id": user_id, "thread_id": thread_id}).mappings().all()
     return [_row_to_meta(r) for r in rows]
 
 
 def get_by_sha_and_name(user_id: str, thread_id: str | None, sha256: str, original_name: str) -> FileMeta | None:
-    q = text("""
-        SELECT *
-        FROM user_files
-        WHERE user_id = :user_id
-          AND (:thread_id IS NULL OR thread_id = :thread_id)
-          AND sha256 = :sha256
-          AND original_name = :original_name
-        LIMIT 1
-    """)
     eng = get_engine()
     with eng.begin() as conn:
-        row = conn.execute(q, {
-            "user_id": user_id,
-            "thread_id": thread_id,
-            "sha256": sha256,
-            "original_name": original_name,
-        }).mappings().first()
+        if thread_id is None:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id AND sha256 = :sha256 AND original_name = :original_name
+                LIMIT 1
+            """)
+            row = conn.execute(q, {
+                "user_id": user_id, "sha256": sha256, "original_name": original_name
+            }).mappings().first()
+        else:
+            q = text("""
+                SELECT * FROM user_files
+                WHERE user_id = :user_id AND thread_id = :thread_id
+                  AND sha256 = :sha256 AND original_name = :original_name
+                LIMIT 1
+            """)
+            row = conn.execute(q, {
+                "user_id": user_id, "thread_id": thread_id,
+                "sha256": sha256, "original_name": original_name,
+            }).mappings().first()
     return _row_to_meta(row) if row else None
 
 
 def delete_metadata(user_id: str, file_id: str, thread_id: str | None = None) -> None:
-    q = text("""
-        DELETE FROM user_files
-        WHERE user_id = :user_id AND id = :id AND
-              (:thread_id IS NULL OR thread_id = :thread_id)
-    """)
     eng = get_engine()
     with eng.begin() as conn:
-        conn.execute(q, {"user_id": user_id, "id": file_id, "thread_id": thread_id})
+        if thread_id is None:
+            q = text("""
+                DELETE FROM user_files
+                WHERE user_id = :user_id AND id = :id
+            """)
+            conn.execute(q, {"user_id": user_id, "id": file_id})
+        else:
+            q = text("""
+                DELETE FROM user_files
+                WHERE user_id = :user_id AND id = :id AND thread_id = :thread_id
+            """)
+            conn.execute(q, {"user_id": user_id, "id": file_id, "thread_id": thread_id})
