@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status, Request
+from fastapi import APIRouter, FastAPI, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core._api import LangChainBetaWarning
@@ -45,7 +45,7 @@ from auth.middleware import AuthMiddleware
 
 from service.files_router import router as files_router
 from service.storage import ensure_upload_root
-from service import catalog_postgres 
+from service import catalog_postgres
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
@@ -98,9 +98,8 @@ app.add_middleware(
 settings: Settings = get_settings()
 
 app.add_middleware(AuthMiddleware, settings=settings)
-
-
 app.add_middleware(LoggingMiddleware)
+
 router = APIRouter()
 
 @router.get("/info")
@@ -119,23 +118,44 @@ async def get_me(request: Request):
     return request.state.user
 
 
+# --- Helper: extract stable per-user ID from JWT claims (aligns with files_router) ---
+def _get_user_id_from_claims(claims: dict) -> str:
+    """
+    Derive a canonical user_id from JWT claims. We avoid tenant scoping here and
+    rely on (user_id, thread_id) for partitioning/isolation.
+    """
+    return str(
+        claims.get("oid")
+        or claims.get("sub")
+        or claims.get("preferred_username")
+        or "unknown"
+    )
+# -------------------------------------------------------------------------------
 
-async def _handle_input(user_input: UserInput, agent: AgentGraph) -> tuple[dict[str, Any], UUID]:
+
+async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) -> tuple[dict[str, Any], UUID]:
     """
     Parse user input and handle any required interrupt resumption.
     Returns kwargs for agent invocation and the run_id.
+
+    NOTE: user identity is derived from JWT claims (request.state.user), not the payload.
     """
     run_id = uuid4()
     thread_id = user_input.thread_id or str(uuid4())
-    user_id = user_input.user_id or str(uuid4())
 
-    configurable = {"thread_id": thread_id, "model": user_input.model, "user_id": user_id}
+    # Canonical identity from JWT (no tenant prefix)
+    internal_user = _get_user_id_from_claims(claims or {})
+
+    configurable = {
+        "thread_id": thread_id,
+        "model": user_input.model,
+        "user_id": internal_user,
+    }
 
     callbacks = []
     if settings.LANGFUSE_TRACING:
         # Initialize Langfuse CallbackHandler for Langchain (tracing)
         langfuse_handler = CallbackHandler()
-
         callbacks.append(langfuse_handler)
 
     if user_input.agent_config:
@@ -175,25 +195,19 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph) -> tuple[dict[
 
 @router.post("/{agent_id}/invoke")
 @router.post("/invoke")
-async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMessage:
+async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAULT_AGENT) -> ChatMessage:
     """
     Invoke an agent with user input to retrieve a final response.
 
-    If agent_id is not provided, the default agent will be used.
-    Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
-    is also attached to messages for recording feedback.
-    Use user_id to persist and continue a conversation across multiple threads.
+    Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
-    # NOTE: Currently this only returns the last message or interrupt.
-    # In the case of an agent outputting multiple AIMessages (such as the background step
-    # in interrupt-agent, or a tool step in research-assistant), it's omitted. Arguably,
-    # you'd want to include it. You could update the API to return a list of ChatMessages
-    # in that case.
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent)
+    kwargs, run_id = await _handle_input(user_input, agent, getattr(request.state, "user", {}) or {})
 
     try:
-        response_events: list[tuple[str, Any]] = await agent.ainvoke(**kwargs, stream_mode=["updates", "values"])  # type: ignore # fmt: skip
+        response_events: list[tuple[str, Any]] = await agent.ainvoke(
+            **kwargs, stream_mode=["updates", "values"]
+        )  # type: ignore # fmt: skip
         response_type, response = response_events[-1]
         if response_type == "values":
             # Normal response, the agent completed successfully
@@ -215,15 +229,15 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
 
 
 async def message_generator(
-    user_input: StreamInput, agent_id: str = DEFAULT_AGENT
+    user_input: StreamInput, agent_id: str, claims: dict
 ) -> AsyncGenerator[str, None]:
     """
     Generate a stream of messages from the agent.
 
-    This is the workhorse method for the /stream endpoint.
+    Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent)
+    kwargs, run_id = await _handle_input(user_input, agent, claims)
 
     try:
         # Process streamed events from the graph and yield messages over the SSE stream.
@@ -243,8 +257,6 @@ async def message_generator(
             if stream_mode == "updates":
                 for node, updates in event.items():
                     # A simple approach to handle agent interrupts.
-                    # In a more sophisticated implementation, we could add
-                    # some structured ChatMessage type to return the interrupt value.
                     if node == "__interrupt__":
                         interrupt: Interrupt
                         for interrupt in updates:
@@ -254,7 +266,7 @@ async def message_generator(
                     update_messages = updates.get("messages", [])
                     # special cases for using langgraph-supervisor library
                     if node == "supervisor":
-                        # Get only the last ToolMessage since is it added by the
+                        # Get only the last ToolMessage since it is added by the
                         # langgraph lib and not actual AI output so it won't be an
                         # independent event
                         if isinstance(update_messages[-1], ToolMessage):
@@ -262,7 +274,7 @@ async def message_generator(
                         else:
                             update_messages = []
 
-                    if node in ("research_expert", "math_expert","team_supervisor"):
+                    if node in ("research_expert", "math_expert", "team_supervisor"):
                         update_messages = []
                     new_messages.extend(update_messages)
 
@@ -299,8 +311,8 @@ async def message_generator(
                     logger.error(f"Error parsing message: {e}")
                     yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
                     continue
-                # LangGraph re-sends the input message, which feels weird, so drop it
-                if chat_message.type == "human" and chat_message.content == user_input.message:
+                # LangGraph re-sends the input message; drop it
+                if isinstance(user_input, StreamInput) and chat_message.type == "human" and chat_message.content == user_input.message:
                     continue
                 yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
@@ -310,15 +322,14 @@ async def message_generator(
                 msg, metadata = event
                 if "skip_stream" in metadata.get("tags", []):
                     continue
-                # For some reason, astream("messages") causes non-LLM nodes to send extra messages.
-                # Drop them.
+                # Drop non-LLM nodes
                 if not isinstance(msg, AIMessageChunk):
                     continue
                 content = remove_tool_calls(msg.content)
                 if content:
                     text = convert_message_content_to_string(content)
 
-                    # NEW: detect plot payload markers and emit as custom SSE
+                    # Detect plot payload markers and emit as custom SSE
                     if text.startswith("PLOTLY_JSON:"):
                         payload = text[len("PLOTLY_JSON:"):]
                         yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
@@ -364,19 +375,14 @@ def _sse_response_example() -> dict[int | str, Any]:
     responses=_sse_response_example(),
 )
 @router.post("/stream", response_class=StreamingResponse, responses=_sse_response_example())
-async def stream(user_input: StreamInput, agent_id: str = DEFAULT_AGENT) -> StreamingResponse:
+async def stream(user_input: StreamInput, request: Request, agent_id: str = DEFAULT_AGENT) -> StreamingResponse:
     """
     Stream an agent's response to a user input, including intermediate messages and tokens.
 
-    If agent_id is not provided, the default agent will be used.
-    Use thread_id to persist and continue a multi-turn conversation. run_id kwarg
-    is also attached to all messages for recording feedback.
-    Use user_id to persist and continue a conversation across multiple threads.
-
-    Set `stream_tokens=false` to return intermediate messages but not token-by-token.
+    Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     return StreamingResponse(
-        message_generator(user_input, agent_id),
+        message_generator(user_input, agent_id, getattr(request.state, "user", {}) or {}),
         media_type="text/event-stream",
     )
 
@@ -406,7 +412,6 @@ def history(input: ChatHistoryInput) -> ChatHistory:
     """
     Get chat history.
     """
-    # TODO: Hard-coding DEFAULT_AGENT here is wonky
     agent: AgentGraph = get_agent(DEFAULT_AGENT)
     try:
         state_snapshot = agent.get_state(
