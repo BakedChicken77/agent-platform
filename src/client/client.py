@@ -1,3 +1,5 @@
+# src/client/client.py
+
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
@@ -29,7 +31,7 @@ class AgentClient:
         agent: str | None = None,
         timeout: float | None = None,
         get_info: bool = True,
-        access_token: str | None = None,  # ← added for OAuth2
+        access_token: str | None = None,  # OAuth2 bearer token (JWT)
     ) -> None:
         """
         Initialize the client.
@@ -44,7 +46,7 @@ class AgentClient:
         """
         self.base_url = base_url
         self.auth_secret = os.getenv("AUTH_SECRET")
-        self.access_token = access_token  # ← store OAuth2 token
+        self.access_token = access_token  # store OAuth2 token
         self.timeout = timeout
         self.info: ServiceMetadata | None = None
         self.agent: str | None = None
@@ -53,11 +55,11 @@ class AgentClient:
         if agent:
             self.update_agent(agent)
 
-    # -------- new helper --------
+    # -------- helper --------
     def set_token(self, token: str | None) -> None:
-        """Update the bearer token at runtime (e.g., per‑session OAuth2 token)."""
+        """Update the bearer token at runtime (e.g., per-session OAuth2 token)."""
         self.access_token = token
-    # ----------------------------
+    # ------------------------
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -99,17 +101,16 @@ class AgentClient:
         message: str,
         model: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent asynchronously. Only the final message is returned.
 
+        Identity is derived server-side from the JWT; no client-supplied user_id is sent.
         Args:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
 
         Returns:
@@ -124,8 +125,6 @@ class AgentClient:
             request.model = model  # type: ignore[assignment]
         if agent_config:
             request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -145,17 +144,16 @@ class AgentClient:
         message: str,
         model: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent synchronously. Only the final message is returned.
 
+        Identity is derived server-side from the JWT; no client-supplied user_id is sent.
         Args:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
 
         Returns:
@@ -170,8 +168,6 @@ class AgentClient:
             request.model = model  # type: ignore[assignment]
         if agent_config:
             request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         try:
             response = httpx.post(
                 f"{self.base_url}/{self.agent}/invoke",
@@ -197,7 +193,7 @@ class AgentClient:
                 raise Exception(f"Error JSON parsing message from server: {e}")
             match parsed["type"]:
                 case "message":
-                    # Convert the JSON formatted message to an AnyMessage
+                    # Convert the JSON formatted message to a ChatMessage
                     try:
                         return ChatMessage.model_validate(parsed["content"])
                     except Exception as e:
@@ -215,13 +211,13 @@ class AgentClient:
         message: str,
         model: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
     ) -> Generator[ChatMessage | str, None, None]:
         """
         Stream the agent's response synchronously.
 
+        Identity is derived server-side from the JWT; no client-supplied user_id is sent.
         Each intermediate message of the agent process is yielded as a ChatMessage.
         If stream_tokens is True (the default value), the response will also yield
         content tokens from streaming models as they are generated.
@@ -230,7 +226,6 @@ class AgentClient:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
@@ -243,8 +238,6 @@ class AgentClient:
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
-        if user_id:
-            request.user_id = user_id
         if model:
             request.model = model  # type: ignore[assignment]
         if agent_config:
@@ -272,12 +265,13 @@ class AgentClient:
         message: str,
         model: str | None = None,
         thread_id: str | None = None,
-        user_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
     ) -> AsyncGenerator[ChatMessage | str, None]:
         """
         Stream the agent's response asynchronously.
+
+        Identity is derived server-side from the JWT; no client-supplied user_id is sent.
 
         Each intermediate message of the agent process is yielded as an AnyMessage.
         If stream_tokens is True (the default value), the response will also yield
@@ -287,7 +281,6 @@ class AgentClient:
             message (str): The message to send to the agent
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
-            user_id (str, optional): User ID for continuing a conversation across multiple threads
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
@@ -304,8 +297,6 @@ class AgentClient:
             request.model = model  # type: ignore[assignment]
         if agent_config:
             request.agent_config = agent_config
-        if user_id:
-            request.user_id = user_id
         async with httpx.AsyncClient() as client:
             try:
                 async with client.stream(
@@ -354,7 +345,7 @@ class AgentClient:
         Get chat history.
 
         Args:
-            thread_id (str, optional): Thread ID for identifying a conversation
+            thread_id (str): Thread ID for identifying a conversation
         """
         request = ChatHistoryInput(thread_id=thread_id)
         try:
@@ -369,7 +360,6 @@ class AgentClient:
             raise AgentClientError(f"Error: {e}")
 
         return ChatHistory.model_validate(response.json())
-
 
     # ---------- Files API ----------
     def list_files(self, thread_id: str | None = None) -> dict:
