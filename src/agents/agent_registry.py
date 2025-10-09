@@ -9,6 +9,7 @@ from langgraph.pregel import Pregel
 
 from agents.chatbot import chatbot
 from agents.universal_supervisor_agent import universal_supervisor_agent
+from agents.coding_agent import coding_agent2
 
 
 from schema import AgentInfo
@@ -45,6 +46,10 @@ agents: dict[str, Agent] = {
     universal_supervisor_agent.name: Agent(
         description="A JACSKE Documentation and Python Coding Agent ",
         graph=universal_supervisor_agent,
+    ),
+    coding_agent2.name: Agent(
+        description="A Python Coding Agent ",
+        graph=coding_agent2,
     ),
 }
 
