@@ -1,28 +1,34 @@
 ## src/service/service.py
 
-import os
 import inspect
 import json
 import logging
+import os
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, status, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core._api import LangChainBetaWarning
-from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    AnyMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
-from langfuse import Langfuse  # type: ignore[import-untyped]
-from langfuse.callback import CallbackHandler  # type: ignore[import-untyped]
-from langgraph.types import Command, Interrupt
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
-from core import settings, get_settings, Settings, LoggingMiddleware
+from auth.middleware import AuthMiddleware
+from core import LoggingMiddleware, settings
+from core.langfuse import get_langfuse_client, get_langfuse_handler
+from langgraph.types import Command, Interrupt
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -34,18 +40,14 @@ from schema import (
     StreamInput,
     UserInput,
 )
+from service import catalog_postgres
+from service.files_router import router as files_router
+from service.storage import ensure_upload_root
 from service.utils import (
     convert_message_content_to_string,
     langchain_to_chat_message,
     remove_tool_calls,
 )
-
-from service.auth import verify_jwt
-from auth.middleware import AuthMiddleware
-
-from service.files_router import router as files_router
-from service.storage import ensure_upload_root
-from service import catalog_postgres
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
@@ -95,8 +97,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],#["Authorization", "authorization", "Content-Type"],
 )
-settings: Settings = get_settings()
-
 app.add_middleware(AuthMiddleware, settings=settings)
 app.add_middleware(LoggingMiddleware)
 
@@ -155,8 +155,9 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
     callbacks = []
     if settings.LANGFUSE_TRACING:
         # Initialize Langfuse CallbackHandler for Langchain (tracing)
-        langfuse_handler = CallbackHandler()
-        callbacks.append(langfuse_handler)
+        langfuse_handler = get_langfuse_handler()
+        if langfuse_handler is not None:
+            callbacks.append(langfuse_handler)
 
     if user_input.agent_config:
         if overlap := configurable.keys() & user_input.agent_config.keys():
@@ -432,12 +433,15 @@ async def health_check():
     health_status = {"status": "ok"}
 
     if settings.LANGFUSE_TRACING:
-        try:
-            langfuse = Langfuse()
-            health_status["langfuse"] = "connected" if langfuse.auth_check() else "disconnected"
-        except Exception as e:
-            logger.error(f"Langfuse connection error: {e}")
-            health_status["langfuse"] = "disconnected"
+        client = get_langfuse_client()
+        if client is None:
+            health_status["langfuse"] = "disabled"
+        else:
+            try:
+                health_status["langfuse"] = "connected" if client.auth_check() else "disconnected"
+            except Exception as e:  # pragma: no cover - network interaction
+                logger.error(f"Langfuse connection error: {e}")
+                health_status["langfuse"] = "disconnected"
 
     return health_status
 

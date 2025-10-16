@@ -89,6 +89,26 @@ The repository is structured as follows:
 - [Setting up VertexAI](docs/VertexAI.md)
 - [Setting up RAG with ChromaDB](docs/RAG_Assistant.md)
 
+### Enabling Langfuse tracing
+
+To capture traces and metrics with [Langfuse](https://langfuse.com/):
+
+1. Create a Langfuse project and copy the **public**, **secret**, and optional **client public** keys along with the project host.
+2. Update your `.env` file with the keys and enable tracing:
+
+   ```env
+   LANGFUSE_TRACING=true
+   LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
+   LANGFUSE_PUBLIC_KEY=pk-...
+   LANGFUSE_SECRET_KEY=sk-lf-...
+   LANGFUSE_CLIENT_PUBLIC_KEY=pk-lf-client-...  # optional, for client-side SDKs
+   LANGFUSE_ENVIRONMENT=development            # optional label
+   LANGFUSE_SAMPLE_RATE=1.0                    # optional sampling override
+   ```
+
+3. Restart the FastAPI service (and Streamlit app if running) so the new configuration is applied. The Docker and local runners automatically forward the `LANGFUSE_*` environment variables to the containers.
+4. Visit the `/health` endpoint to confirm Langfuse connectivity or inspect traces in the Langfuse dashboard after invoking an agent.
+
 ### Building or customizing your own agent
 
 To customize the agent for your own use case:
