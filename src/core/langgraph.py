@@ -291,3 +291,117 @@ def instrument_langgraph_node(node: Any | None = None, node_name: str | None = N
     if hasattr(node, "ainvoke") and hasattr(node, "invoke"):
         return _RunnableWrapper(node, node_name)
     return _wrap_callable(node, node_name)
+
+
+def runtime_metadata(runtime: Mapping[str, Any] | None, **extra: Any) -> dict[str, Any]:
+    """Return Langfuse metadata derived from runtime context and ``extra`` values."""
+
+    metadata: dict[str, Any] = {}
+    if runtime:
+        for key in ("agent_name", "run_id", "thread_id", "user_id"):
+            value = runtime.get(key)
+            if value is not None:
+                metadata[key] = value
+    for key, value in extra.items():
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
+def start_runtime_span(
+    name: str,
+    runtime: Mapping[str, Any] | None,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> tuple[Any | None, AbstractContextManager[Any]]:
+    """Start a Langfuse span bound to ``runtime`` context if possible."""
+
+    client = get_langfuse_client()
+    if client is None or not runtime:
+        return None, nullcontext()
+
+    span_kwargs: dict[str, Any] = {"name": name}
+    if metadata:
+        span_kwargs["metadata"] = dict(metadata)
+
+    for key in ("trace_id", "session_id", "user_id"):
+        value = runtime.get(key)
+        if value is not None:
+            span_kwargs[key] = value
+
+    try:
+        span = client.span(**span_kwargs)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug("Failed to create Langfuse runtime span %s: %s", name, exc)
+        return None, nullcontext()
+
+    starter = getattr(span, "start_as_current_span", None)
+    if callable(starter):
+        try:
+            context = starter()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Failed to enter Langfuse runtime span %s: %s", name, exc)
+            context = nullcontext()
+    else:
+        context = nullcontext()
+
+    return span, context
+
+
+def update_runtime_span(span: Any | None, **payload: Any) -> None:
+    """Update ``span`` with additional payload data when available."""
+
+    if span is None or not payload:
+        return
+    try:
+        span.update(**payload)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug("Failed to update Langfuse runtime span: %s", exc)
+
+
+def end_runtime_span(span: Any | None, error: Exception | None = None) -> None:
+    """End ``span`` gracefully, marking failures when ``error`` is provided."""
+
+    if span is None:
+        return
+    try:
+        if error is None:
+            span.end()
+        else:
+            span.end(level="ERROR", status_message=f"{error.__class__.__name__}: {error}")
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug("Failed to end Langfuse runtime span: %s", exc)
+
+
+def emit_runtime_event(
+    name: str,
+    runtime: Mapping[str, Any] | None,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit a Langfuse event associated with ``runtime`` context."""
+
+    if not runtime:
+        return
+
+    client = get_langfuse_client()
+    if client is None:
+        return
+
+    emitter = getattr(client, "event", None)
+    if not callable(emitter):  # pragma: no cover - optional API
+        return
+
+    event_kwargs: dict[str, Any] = {"name": name}
+    if metadata:
+        event_kwargs["metadata"] = dict(metadata)
+
+    for key in ("trace_id", "session_id", "user_id"):
+        value = runtime.get(key)
+        if value is not None:
+            event_kwargs[key] = value
+
+    try:
+        emitter(**event_kwargs)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug("Failed to emit Langfuse runtime event %s: %s", name, exc)
