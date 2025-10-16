@@ -1,13 +1,13 @@
 # universal_supervisor_agent.py
 
-import os
 from dotenv import load_dotenv
+from langgraph_supervisor import create_handoff_tool, create_supervisor
+
+from agents.coding_agent import coding_agent  # import the coding expert
+from agents.instrumentation import configure_agent
+from agents.tools import JACSKE_database_search, JACSKE_get_full_doc_text
 from core import get_model, settings
 from langgraph.prebuilt import create_react_agent
-from langgraph_supervisor import create_supervisor, create_handoff_tool
-from agents.tools import calculator, JACSKE_database_search, JACSKE_get_full_doc_text
-from agents.coding_agent import coding_agent  # import the coding expert
-from langchain_experimental.tools.python.tool import PythonREPLTool
 from prompts.Agents.research_agent import RESEARCH_AGENT_PROMPT
 from prompts.indexes.jacske import JACSKE
 
@@ -87,3 +87,9 @@ NOTE: THE USER CAN'T SEE THE EXPERTS' RESPONSES.\
 
 universal_supervisor_agent = workflow.compile()
 universal_supervisor_agent.name = "JACSKE_Agent_Coding"
+universal_supervisor_agent = configure_agent(
+    universal_supervisor_agent,
+    agent_id=universal_supervisor_agent.name,
+    agent_kind="supervisor",
+    description="A JACSKE Documentation and Python Coding Agent",
+)

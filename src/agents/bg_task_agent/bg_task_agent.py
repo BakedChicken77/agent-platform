@@ -4,11 +4,12 @@ import asyncio
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
-from langgraph.graph import END, MessagesState, StateGraph
-from langgraph.types import StreamWriter
 
 from agents.bg_task_agent.task import Task
+from agents.instrumentation import configure_agent, with_langfuse_span
 from core import get_model, settings
+from langgraph.graph import END, MessagesState, StateGraph
+from langgraph.types import StreamWriter
 
 
 class AgentState(MessagesState, total=False):
@@ -26,6 +27,7 @@ def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessa
     return preprocessor | model  # type: ignore[return-value]
 
 
+@with_langfuse_span("model")
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
     model_runnable = wrap_model(m)
@@ -35,6 +37,7 @@ async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     return {"messages": [response]}
 
 
+@with_langfuse_span("bg_task")
 async def bg_task(state: AgentState, writer: StreamWriter) -> AgentState:
     task1 = Task("Simple task 1...", writer)
     task2 = Task("Simple task 2...", writer)
@@ -61,4 +64,10 @@ agent.add_edge("bg_task", "model")
 agent.add_edge("model", END)
 
 bg_task_agent = agent.compile()
+bg_task_agent = configure_agent(
+    bg_task_agent,
+    agent_id="bg_task_agent",
+    agent_kind="state_graph",
+    description="Background task agent with progress updates.",
+)
 
