@@ -32,6 +32,8 @@ class AgentClient:
         timeout: float | None = None,
         get_info: bool = True,
         access_token: str | None = None,  # OAuth2 bearer token (JWT)
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """
         Initialize the client.
@@ -48,6 +50,9 @@ class AgentClient:
         self.auth_secret = os.getenv("AUTH_SECRET")
         self.access_token = access_token  # store OAuth2 token
         self.timeout = timeout
+        self.trace_id = trace_id
+        self.session_id = session_id
+        self._trace_url: str | None = None
         self.info: ServiceMetadata | None = None
         self.agent: str | None = None
         if get_info:
@@ -68,7 +73,86 @@ class AgentClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         elif self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
+        if self.trace_id:
+            headers["X-Langfuse-Trace-Id"] = self.trace_id
+        if self.session_id:
+            headers["X-Langfuse-Session-Id"] = self.session_id
         return headers
+
+    @property
+    def trace_url(self) -> str | None:
+        """Return the latest Langfuse trace URL, if available."""
+
+        return self._trace_url
+
+    def _resolve_trace_context(
+        self, trace_id: str | None, session_id: str | None
+    ) -> tuple[str | None, str | None]:
+        resolved_trace_id = trace_id or self.trace_id
+        resolved_session_id = session_id or self.session_id
+        return resolved_trace_id, resolved_session_id
+
+    def _merge_agent_config(
+        self,
+        agent_config: dict[str, Any] | None,
+        trace_id: str | None,
+        session_id: str | None,
+    ) -> dict[str, Any] | None:
+        if agent_config is None and not trace_id and not session_id:
+            return agent_config
+
+        merged: dict[str, Any] = {}
+        if agent_config:
+            merged.update(agent_config)
+        if trace_id and "trace_id" not in merged:
+            merged["trace_id"] = trace_id
+        if session_id and "session_id" not in merged:
+            merged["session_id"] = session_id
+        return merged
+
+    def _update_trace_context(self, *, headers: httpx.Headers | None = None, payload: dict[str, Any] | None = None) -> None:
+        trace_id: str | None = None
+        trace_url: str | None = None
+        session_id: str | None = None
+
+        if headers:
+            trace_id = (
+                headers.get("x-langfuse-trace-id")
+                or headers.get("x-trace-id")
+                or headers.get("X-Langfuse-Trace-Id")
+            )
+            trace_url = (
+                headers.get("x-langfuse-trace-url")
+                or headers.get("x-trace-url")
+                or headers.get("X-Langfuse-Trace-Url")
+            )
+            session_id = (
+                headers.get("x-langfuse-session-id")
+                or headers.get("x-session-id")
+                or headers.get("X-Langfuse-Session-Id")
+            )
+
+        if payload:
+            trace_id = payload.get("trace_id") or trace_id
+            trace_url = payload.get("trace_url") or trace_url
+            payload_metadata = payload.get("response_metadata")
+            if isinstance(payload_metadata, dict):
+                trace_id = payload_metadata.get("trace_id") or trace_id
+                trace_url = payload_metadata.get("trace_url") or trace_url
+            content = payload.get("content")
+            if isinstance(content, dict):
+                content_metadata = content.get("response_metadata")
+                if isinstance(content_metadata, dict):
+                    trace_id = content_metadata.get("trace_id") or trace_id
+                    trace_url = content_metadata.get("trace_url") or trace_url
+            session_id = payload.get("session_id") or session_id
+
+        if trace_id:
+            self.trace_id = trace_id
+        if session_id:
+            self.session_id = session_id
+        if trace_url:
+            self._trace_url = trace_url
 
     def retrieve_info(self) -> None:
         try:
@@ -102,6 +186,8 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent asynchronously. Only the final message is returned.
@@ -118,13 +204,16 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        resolved_trace_id, resolved_session_id = self._resolve_trace_context(trace_id, session_id)
+
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
-        if agent_config:
-            request.agent_config = agent_config
+        merged_config = self._merge_agent_config(agent_config, resolved_trace_id, resolved_session_id)
+        if merged_config:
+            request.agent_config = merged_config
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -137,7 +226,9 @@ class AgentClient:
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")
 
-        return ChatMessage.model_validate(response.json())
+        payload = response.json()
+        self._update_trace_context(headers=response.headers, payload=payload)
+        return ChatMessage.model_validate(payload)
 
     def invoke(
         self,
@@ -145,6 +236,8 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent synchronously. Only the final message is returned.
@@ -161,13 +254,16 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        resolved_trace_id, resolved_session_id = self._resolve_trace_context(trace_id, session_id)
+
         request = UserInput(message=message)
         if thread_id:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
-        if agent_config:
-            request.agent_config = agent_config
+        merged_config = self._merge_agent_config(agent_config, resolved_trace_id, resolved_session_id)
+        if merged_config:
+            request.agent_config = merged_config
         try:
             response = httpx.post(
                 f"{self.base_url}/{self.agent}/invoke",
@@ -179,7 +275,9 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(f"Error: {e}")
 
-        return ChatMessage.model_validate(response.json())
+        payload = response.json()
+        self._update_trace_context(headers=response.headers, payload=payload)
+        return ChatMessage.model_validate(payload)
 
     def _parse_stream_line(self, line: str) -> ChatMessage | str | None:
         line = line.strip()
@@ -195,7 +293,9 @@ class AgentClient:
                 case "message":
                     # Convert the JSON formatted message to a ChatMessage
                     try:
-                        return ChatMessage.model_validate(parsed["content"])
+                        message_payload = parsed["content"]
+                        self._update_trace_context(payload=parsed)
+                        return ChatMessage.model_validate(message_payload)
                     except Exception as e:
                         raise Exception(f"Server returned invalid message: {e}")
                 case "token":
@@ -213,6 +313,8 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Generator[ChatMessage | str, None, None]:
         """
         Stream the agent's response synchronously.
@@ -235,13 +337,16 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        resolved_trace_id, resolved_session_id = self._resolve_trace_context(trace_id, session_id)
+
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
-        if agent_config:
-            request.agent_config = agent_config
+        merged_config = self._merge_agent_config(agent_config, resolved_trace_id, resolved_session_id)
+        if merged_config:
+            request.agent_config = merged_config
         try:
             with httpx.stream(
                 "POST",
@@ -251,6 +356,7 @@ class AgentClient:
                 timeout=self.timeout,
             ) as response:
                 response.raise_for_status()
+                self._update_trace_context(headers=response.headers)
                 for line in response.iter_lines():
                     if line.strip():
                         parsed = self._parse_stream_line(line)
@@ -267,6 +373,8 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncGenerator[ChatMessage | str, None]:
         """
         Stream the agent's response asynchronously.
@@ -290,13 +398,16 @@ class AgentClient:
         """
         if not self.agent:
             raise AgentClientError("No agent selected. Use update_agent() to select an agent.")
+        resolved_trace_id, resolved_session_id = self._resolve_trace_context(trace_id, session_id)
+
         request = StreamInput(message=message, stream_tokens=stream_tokens)
         if thread_id:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
-        if agent_config:
-            request.agent_config = agent_config
+        merged_config = self._merge_agent_config(agent_config, resolved_trace_id, resolved_session_id)
+        if merged_config:
+            request.agent_config = merged_config
         async with httpx.AsyncClient() as client:
             try:
                 async with client.stream(
@@ -307,6 +418,7 @@ class AgentClient:
                     timeout=self.timeout,
                 ) as response:
                     response.raise_for_status()
+                    self._update_trace_context(headers=response.headers)
                     async for line in response.aiter_lines():
                         if line.strip():
                             parsed = self._parse_stream_line(line)
@@ -317,7 +429,13 @@ class AgentClient:
                 raise AgentClientError(f"Error: {e}")
 
     async def acreate_feedback(
-        self, run_id: str, key: str, score: float, kwargs: dict[str, Any] = {}
+        self,
+        run_id: str,
+        key: str,
+        score: float,
+        kwargs: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        trace_url: str | None = None,
     ) -> None:
         """
         Create a feedback record for a run.
@@ -326,12 +444,20 @@ class AgentClient:
         credentials can be stored and managed in the service rather than the client.
         See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
         """
-        request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
+        payload_kwargs = kwargs or {}
+        request = Feedback(
+            run_id=run_id,
+            key=key,
+            score=score,
+            kwargs=payload_kwargs,
+            trace_id=trace_id,
+            trace_url=trace_url,
+        )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     f"{self.base_url}/feedback",
-                    json=request.model_dump(),
+                    json=request.model_dump(exclude_none=True),
                     headers=self._headers,
                     timeout=self.timeout,
                 )

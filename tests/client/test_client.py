@@ -41,6 +41,11 @@ def test_headers(mock_env):
         client = AgentClient(get_info=False)
         assert client._headers == {"Authorization": "Bearer test-secret"}
 
+    # Test trace/session headers
+    client = AgentClient(get_info=False, trace_id="trace-123", session_id="session-456")
+    assert client._headers["X-Langfuse-Trace-Id"] == "trace-123"
+    assert client._headers["X-Langfuse-Session-Id"] == "session-456"
+
 
 def test_invoke(agent_client):
     """Test synchronous invocation."""
@@ -60,12 +65,20 @@ def test_invoke(agent_client):
         assert response.type == "ai"
         assert response.content == ANSWER
 
-    # Test with model and thread_id
-    with patch("httpx.post", return_value=mock_response) as mock_post:
+    # Test with model, thread_id and trace headers
+    trace_response = Response(
+        200,
+        json={"type": "ai", "content": ANSWER, "trace_id": "trace-42", "trace_url": "http://trace"},
+        headers={"X-Langfuse-Trace-Id": "trace-42", "X-Langfuse-Trace-Url": "http://trace"},
+        request=mock_request,
+    )
+    with patch("httpx.post", return_value=trace_response) as mock_post:
         response = agent_client.invoke(
             QUESTION,
             model="gpt-4o",
             thread_id="test-thread",
+            trace_id="trace-42",
+            session_id="session-24",
         )
         assert isinstance(response, ChatMessage)
         # Verify request
@@ -73,6 +86,10 @@ def test_invoke(agent_client):
         assert kwargs["json"]["message"] == QUESTION
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
+        assert kwargs["headers"]["X-Langfuse-Trace-Id"] == "trace-42"
+        assert kwargs["headers"]["X-Langfuse-Session-Id"] == "session-24"
+        assert agent_client.trace_id == "trace-42"
+        assert agent_client.trace_url == "http://trace"
 
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
@@ -103,6 +120,8 @@ async def test_ainvoke(agent_client):
             QUESTION,
             model="gpt-4o",
             thread_id="test-thread",
+            trace_id="trace-abc",
+            session_id="session-def",
         )
         assert isinstance(response, ChatMessage)
         assert response.type == "ai"
@@ -112,6 +131,8 @@ async def test_ainvoke(agent_client):
         assert kwargs["json"]["message"] == QUESTION
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
+        assert kwargs["headers"]["X-Langfuse-Trace-Id"] == "trace-abc"
+        assert kwargs["headers"]["X-Langfuse-Session-Id"] == "session-def"
 
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
@@ -141,12 +162,15 @@ def test_stream(agent_client):
     mock_response.status_code = 200
     mock_response.iter_lines.return_value = events
     mock_response.request = Request("POST", "http://test/stream")
+    mock_response.headers = {"X-Langfuse-Trace-Id": "stream-trace", "X-Langfuse-Trace-Url": "http://stream-trace"}
     mock_response.__enter__ = Mock(return_value=mock_response)
     mock_response.__exit__ = Mock(return_value=None)
 
     with patch("httpx.stream", return_value=mock_response):
         # Collect all streamed responses
-        responses = list(agent_client.stream(QUESTION))
+        responses = list(
+            agent_client.stream(QUESTION, trace_id="stream-trace", session_id="stream-session")
+        )
 
         # Verify tokens were streamed
         assert len(responses) == len(TOKENS) + 1  # tokens + final message
@@ -158,6 +182,8 @@ def test_stream(agent_client):
         assert isinstance(final_message, ChatMessage)
         assert final_message.type == "ai"
         assert final_message.content == FINAL_ANSWER
+        assert agent_client.trace_id == "stream-trace"
+        assert agent_client.trace_url == "http://stream-trace"
 
     # Test error response
     error_response = Response(
@@ -198,6 +224,7 @@ async def test_astream(agent_client):
     mock_response.status_code = 200
     mock_response.request = Request("POST", "http://test/stream")
     mock_response.aiter_lines = Mock(return_value=async_events())
+    mock_response.headers = {"X-Langfuse-Trace-Id": "async-stream-trace"}
     mock_response.__aenter__ = AsyncMock(return_value=mock_response)
 
     mock_client = AsyncMock()
@@ -207,7 +234,9 @@ async def test_astream(agent_client):
     with patch("httpx.AsyncClient", return_value=mock_client):
         # Collect all streamed responses
         responses = []
-        async for response in agent_client.astream(QUESTION):
+        async for response in agent_client.astream(
+            QUESTION, trace_id="async-stream-trace", session_id="async-session"
+        ):
             responses.append(response)
 
         # Verify tokens were streamed
@@ -220,6 +249,7 @@ async def test_astream(agent_client):
         assert isinstance(final_message, ChatMessage)
         assert final_message.type == "ai"
         assert final_message.content == FINAL_ANSWER
+        assert agent_client.trace_id == "async-stream-trace"
 
     # Test error response
     error_response = Response(
@@ -248,13 +278,22 @@ async def test_acreate_feedback(agent_client):
     # Test successful response
     mock_response = Response(200, json={}, request=Request("POST", "http://test/feedback"))
     with patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
-        await agent_client.acreate_feedback(RUN_ID, KEY, SCORE, KWARGS)
+        await agent_client.acreate_feedback(
+            RUN_ID,
+            KEY,
+            SCORE,
+            KWARGS,
+            trace_id="trace-1",
+            trace_url="http://trace",
+        )
         # Verify request
         args, kwargs = mock_post.call_args
         assert kwargs["json"]["run_id"] == RUN_ID
         assert kwargs["json"]["key"] == KEY
         assert kwargs["json"]["score"] == SCORE
         assert kwargs["json"]["kwargs"] == KWARGS
+        assert kwargs["json"]["trace_id"] == "trace-1"
+        assert kwargs["json"]["trace_url"] == "http://trace"
 
     # Test error response
     error_response = Response(

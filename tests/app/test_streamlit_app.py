@@ -53,6 +53,8 @@ def test_app_settings(mock_agent_client):
     assert mock_agent_client.agent == "test-agent"
     at.sidebar.selectbox[0].set_value("gpt-4o-mini")
     at.sidebar.selectbox[1].set_value("chatbot")
+    mock_agent_client.trace_id = "trace-xyz"
+    mock_agent_client.trace_url = "https://langfuse.example/trace-xyz"
     at.chat_input[0].set_value(PROMPT).run()
     print(at)
 
@@ -68,8 +70,13 @@ def test_app_settings(mock_agent_client):
         message=PROMPT,
         model=OpenAIModelName.GPT_4O_MINI,
         thread_id=at.session_state.thread_id,
-        user_id="1234",
+        trace_id=None,
+        session_id="1234",
     )
+    assert at.session_state.trace_id == "trace-xyz"
+    assert at.session_state.trace_url == "https://langfuse.example/trace-xyz"
+    assert at.sidebar.link_button[0].label == ":material/visibility: View trace in Langfuse"
+    assert at.sidebar.link_button[0].url == "https://langfuse.example/trace-xyz"
     assert not at.exception
 
 
@@ -125,6 +132,10 @@ async def test_app_streaming(mock_agent_client):
             yield m
 
     mock_agent_client.astream = Mock(return_value=amessage_iter())
+    mock_agent_client.trace_id = "stream-trace"
+    mock_agent_client.trace_url = "https://langfuse.example/stream-trace"
+    expected_trace_id = at.session_state.trace_id
+    expected_session_id = at.session_state.session_id
 
     at.toggle[0].set_value(True)  # Use Streaming = True
     at.chat_input[0].set_value(PROMPT).run()
@@ -142,6 +153,15 @@ async def test_app_streaming(mock_agent_client):
     assert tool_status.markdown[1].value == "Output:"
     assert tool_status.markdown[2].value == "42"
     assert response.markdown[-1].value == "The answer is 42"
+    mock_agent_client.astream.assert_called_with(
+        message=PROMPT,
+        model=OpenAIModelName.GPT_4O,
+        thread_id=at.session_state.thread_id,
+        trace_id=expected_trace_id,
+        session_id=expected_session_id,
+    )
+    assert at.session_state.trace_id == "stream-trace"
+    assert at.session_state.trace_url == "https://langfuse.example/stream-trace"
     assert not at.exception
 
 

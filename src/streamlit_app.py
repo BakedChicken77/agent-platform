@@ -263,6 +263,14 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
     # Get or create user ID
     user_id = get_or_create_user_id()
 
+    # Persist Langfuse context in the session
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = st.query_params.get("session_id") or user_id
+    if "trace_id" not in st.session_state:
+        st.session_state.trace_id = st.query_params.get("trace_id")
+    if "trace_url" not in st.session_state:
+        st.session_state.trace_url = st.query_params.get("trace_url")
+
     if "agent_client" not in st.session_state:
         agent_url = os.getenv("AGENT_URL") or f"http://{os.getenv('HOST','0.0.0.0')}:{os.getenv('PORT',8080)}"
         try:
@@ -270,7 +278,9 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                 # Inject access_token only if auth is enabled; otherwise pass None
                 client = AgentClient(
                     base_url=agent_url,
-                    access_token=st.session_state.get("access_token") if AUTH_ENABLED else None
+                    access_token=st.session_state.get("access_token") if AUTH_ENABLED else None,
+                    trace_id=st.session_state.get("trace_id"),
+                    session_id=st.session_state.get("session_id"),
                 )
                 st.session_state.agent_client = client
         except AgentClientError as e:
@@ -306,6 +316,8 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
         if st.button(":material/chat: New Chat", use_container_width=True):
             st.session_state.messages = []
             st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.trace_id = None
+            st.session_state.trace_url = None
             st.rerun()
 
         with st.popover(":material/settings: Agents/Workflows", use_container_width=True):
@@ -350,9 +362,17 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
             if not st_base_url.startswith("https") and "localhost" not in st_base_url:
                 st_base_url = st_base_url.replace("http", "https")
             # Include both thread_id and user_id in the URL for sharing to maintain user identity
-            chat_url = (
-                f"{st_base_url}?thread_id={st.session_state.thread_id}&{USER_ID_COOKIE}={user_id}"
-            )
+            query_parts = [
+                f"thread_id={st.session_state.thread_id}",
+                f"{USER_ID_COOKIE}={user_id}",
+            ]
+            if st.session_state.get("trace_id"):
+                query_parts.append(f"trace_id={st.session_state.trace_id}")
+            if st.session_state.get("trace_url"):
+                query_parts.append(
+                    f"trace_url={urllib.parse.quote(st.session_state.trace_url, safe='')}"
+                )
+            chat_url = f"{st_base_url}?{'&'.join(query_parts)}"
             st.markdown(f"**Chat URL:**\n```text\n{chat_url}\n```")
             st.info("Copy the above URL to share or revisit this chat")
 
@@ -363,6 +383,13 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
         st.caption(
             "Made with :material/favorite: by [Steve](https://google.com) for you"
         )
+
+        if st.session_state.get("trace_url"):
+            st.link_button(
+                ":material/visibility: View trace in Langfuse",
+                st.session_state.trace_url,
+                use_container_width=True,
+            )
 
         # --- Upload popover ---
         with st.popover(":material/upload_file: Upload files", use_container_width=True):
@@ -448,6 +475,8 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
+                    trace_id=st.session_state.trace_id,
+                    session_id=st.session_state.session_id,
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 await draw_messages(stream, is_new=True)
@@ -456,10 +485,16 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
+                    trace_id=st.session_state.trace_id,
+                    session_id=st.session_state.session_id,
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 messages.append(response)
                 st.chat_message("ai").write(response.content)
+            if agent_client.trace_id:
+                st.session_state.trace_id = agent_client.trace_id
+            if agent_client.trace_url:
+                st.session_state.trace_url = agent_client.trace_url
             st.rerun()  # Clear stale containers
         except AgentClientError as e:
             st.error(f"Error generating response: {e}")
@@ -674,6 +709,8 @@ async def handle_feedback() -> None:
                 key="human-feedback-stars",
                 score=normalized_score,
                 kwargs={"comment": "In-line human feedback"},
+                trace_id=st.session_state.get("trace_id"),
+                trace_url=st.session_state.get("trace_url"),
             )
         except AgentClientError as e:
             st.error(f"Error recording feedback: {e}")

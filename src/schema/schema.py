@@ -156,6 +156,14 @@ class Feedback(BaseModel):  # type: ignore[no-redef]
         default={},
         examples=[{"comment": "In-line human feedback"}],
     )
+    trace_id: str | None = Field(
+        default=None,
+        description="Associated Langfuse trace identifier, if available.",
+    )
+    trace_url: str | None = Field(
+        default=None,
+        description="URL to the Langfuse trace, if available.",
+    )
 
 
 class FeedbackResponse(BaseModel):
