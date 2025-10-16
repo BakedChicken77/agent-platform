@@ -1,28 +1,31 @@
 ## src/service/service.py
 
-import os
 import inspect
 import json
 import logging
+import os
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, status, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse  # type: ignore[import-untyped]
 from langfuse.callback import CallbackHandler  # type: ignore[import-untyped]
-from langgraph.types import Command, Interrupt
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
-from core import settings, get_settings, Settings, LoggingMiddleware
+from agents.instrumentation import get_agent_metadata
+from auth.middleware import AuthMiddleware
+from core import LoggingMiddleware, settings
+from core.langfuse import get_langfuse_client
+from langgraph.types import Command, Interrupt
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -34,18 +37,14 @@ from schema import (
     StreamInput,
     UserInput,
 )
+from service import catalog_postgres
+from service.files_router import router as files_router
+from service.storage import ensure_upload_root
 from service.utils import (
     convert_message_content_to_string,
     langchain_to_chat_message,
     remove_tool_calls,
 )
-
-from service.auth import verify_jwt
-from auth.middleware import AuthMiddleware
-
-from service.files_router import router as files_router
-from service.storage import ensure_upload_root
-from service import catalog_postgres
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
@@ -95,8 +94,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],#["Authorization", "authorization", "Content-Type"],
 )
-settings: Settings = get_settings()
-
 app.add_middleware(AuthMiddleware, settings=settings)
 app.add_middleware(LoggingMiddleware)
 
@@ -143,20 +140,87 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
     run_id = uuid4()
     thread_id = user_input.thread_id or str(uuid4())
 
-    # Canonical identity from JWT (no tenant prefix)
     internal_user = _get_user_id_from_claims(claims or {})
+    agent_metadata = get_agent_metadata(agent)
+    agent_id = agent_metadata.get("agent_id") or getattr(agent, "name", DEFAULT_AGENT)
+    agent_kind = agent_metadata.get("agent_kind")
 
-    configurable = {
+    configurable: dict[str, Any] = {
         "thread_id": thread_id,
         "model": user_input.model,
         "user_id": internal_user,
+        "agent_id": agent_id,
+        "agent_kind": agent_kind,
     }
 
     callbacks = []
+    trace_id: str | None = None
+    session_id: str | None = None
+    trace_handler: CallbackHandler | None = None
+    store = getattr(agent, "store", None)
+
     if settings.LANGFUSE_TRACING:
-        # Initialize Langfuse CallbackHandler for Langchain (tracing)
-        langfuse_handler = CallbackHandler()
-        callbacks.append(langfuse_handler)
+        langfuse_client = get_langfuse_client()
+        if langfuse_client is not None:
+            stored_record: dict[str, Any] | None = None
+            if store is not None and hasattr(store, "aget"):
+                try:
+                    item = await store.aget(("langfuse", internal_user), thread_id)
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Failed to load Langfuse metadata: %s", exc)
+                else:
+                    if item is not None:
+                        stored_value = getattr(item, "value", item)
+                        if isinstance(stored_value, dict):
+                            stored_record = stored_value
+            if stored_record:
+                trace_id = stored_record.get("trace_id")
+                session_id = stored_record.get("session_id")
+
+            session_id = session_id or thread_id
+            metadata = {
+                "agent_id": agent_id,
+                "agent_kind": agent_kind,
+                "thread_id": thread_id,
+            }
+            trace_kwargs = {
+                "name": agent_id,
+                "user_id": internal_user,
+                "session_id": session_id,
+                "metadata": {k: v for k, v in metadata.items() if v is not None},
+            }
+            if trace_id:
+                trace_kwargs["id"] = trace_id
+
+            try:
+                trace = langfuse_client.trace(**trace_kwargs)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to initialize Langfuse trace: %s", exc)
+                trace = None
+            else:
+                trace_id = trace.trace_id
+                try:
+                    trace_handler = trace.get_langchain_handler()
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Failed to create Langfuse handler: %s", exc)
+                if store is not None and hasattr(store, "aput"):
+                    try:
+                        await store.aput(
+                            ("langfuse", internal_user),
+                            thread_id,
+                            {"trace_id": trace_id, "session_id": session_id},
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        logger.warning("Failed to persist Langfuse metadata: %s", exc)
+
+        if trace_handler is not None:
+            callbacks.append(trace_handler)
+        else:
+            callbacks.append(CallbackHandler())
+
+    session_id = session_id or thread_id
+    configurable["trace_id"] = trace_id
+    configurable["session_id"] = session_id
 
     if user_input.agent_config:
         if overlap := configurable.keys() & user_input.agent_config.keys():

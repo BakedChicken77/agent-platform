@@ -5,11 +5,13 @@ import inspect
 import io
 import math
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import matplotlib
 
 matplotlib.use("Agg")  # force headless backend
+
+import builtins
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,16 +23,15 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_experimental.utilities import PythonREPL
-from langgraph.prebuilt import InjectedState, create_react_agent
-from langgraph.managed import RemainingSteps
-from typing_extensions import TypedDict, Annotated
+from typing_extensions import TypedDict
 
+from agents.instrumentation import configure_agent, with_langfuse_span
 from core import get_model, settings
-from langgraph.graph import MessagesState, StateGraph, START, END
+from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.managed import RemainingSteps
+from langgraph.prebuilt import InjectedState, create_react_agent
 from service import catalog_postgres
-
-import builtins
 
 # Load environment variables (e.g. OPENAI_API_KEY)
 load_dotenv()
@@ -60,7 +61,7 @@ class CodingState(TypedDict):
 
 
 
-def _extract_runtime_ids(state: MessagesState) -> tuple[Optional[str], Optional[str]]:
+def _extract_runtime_ids(state: MessagesState) -> tuple[str | None, str | None]:
     """
     Read IDs injected by pre_model_hook under `runtime_ids`.
     """
@@ -68,7 +69,7 @@ def _extract_runtime_ids(state: MessagesState) -> tuple[Optional[str], Optional[
     return cfg.get("user_id"), cfg.get("thread_id")
 
 
-async def _load_user_uploads(user_id: Optional[str], thread_id: Optional[str]) -> list[Any]:
+async def _load_user_uploads(user_id: str | None, thread_id: str | None) -> list[Any]:
     if not user_id:
         return []
     try:
@@ -80,7 +81,7 @@ async def _load_user_uploads(user_id: Optional[str], thread_id: Optional[str]) -
         return []
 
 
-async def _prepare_repl_globals(user_id: Optional[str], thread_id: Optional[str]) -> dict[str, Any]:
+async def _prepare_repl_globals(user_id: str | None, thread_id: str | None) -> dict[str, Any]:
     context_globals: dict[str, Any] = dict(safe_globals)
     file_map: dict[str, str] = {}
     metadata: list[dict[str, Any]] = []
@@ -139,8 +140,8 @@ async def python_repl(
     """
     Execute Python code and return its stdout or an error message.
     """
-    user_id: Optional[str] = None
-    thread_id: Optional[str] = None
+    user_id: str | None = None
+    thread_id: str | None = None
 
     if state is not None:
         user_id, thread_id = _extract_runtime_ids(state)
@@ -210,10 +211,23 @@ coding_agent = create_react_agent(
 
 
 builder = StateGraph(MessagesState)
-builder.add_node("react_agent", coding_agent)
+
+
+@with_langfuse_span("react_agent")
+async def _react_agent_node(state: MessagesState, config: RunnableConfig) -> dict[str, Any]:
+    return await coding_agent.ainvoke(state, config)
+
+
+builder.add_node("react_agent", _react_agent_node)
 builder.add_edge(START, "react_agent")
 builder.add_edge("react_agent", END)
 
 # 3) Re-export under the same symbol & name
 coding_agent2 = builder.compile()
 coding_agent2.name = "coding_expert"
+coding_agent2 = configure_agent(
+    coding_agent2,
+    agent_id=coding_agent2.name,
+    agent_kind="state_graph",
+    description="A Python Coding Agent",
+)
