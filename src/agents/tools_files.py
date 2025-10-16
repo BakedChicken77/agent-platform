@@ -6,6 +6,7 @@ from typing import Annotated, Optional
 from langchain_core.tools import tool
 
 from core import settings
+from core.observability import instrument_tool
 from schema.files import FileMeta, ListFilesResponse
 from service.catalog import list_metadata, get_metadata
 from langgraph.prebuilt import InjectedState
@@ -22,6 +23,7 @@ def _ctx_ids(state: MessagesState) -> tuple[str, str | None]:
 
 
 @tool
+@instrument_tool(name="ListUserFiles")
 async def ListUserFiles(
     state: Annotated[MessagesState, InjectedState],
 ) -> list[dict]:
@@ -36,6 +38,7 @@ async def ListUserFiles(
     return [m.model_dump() for m in items]
 
 @tool
+@instrument_tool(name="ReadUserFile")
 async def ReadUserFile(
     file_id: Annotated[str, "ID returned by list files"],
     state: Annotated[MessagesState, InjectedState],

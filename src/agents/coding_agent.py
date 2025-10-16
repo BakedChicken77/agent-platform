@@ -26,6 +26,7 @@ from langgraph.managed import RemainingSteps
 from typing_extensions import TypedDict, Annotated
 
 from core import get_model, settings
+from core.observability import instrument_tool
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langgraph.graph.message import add_messages
 from service import catalog_postgres
@@ -132,6 +133,7 @@ async def _prepare_repl_globals(user_id: Optional[str], thread_id: Optional[str]
 
 
 @tool
+@instrument_tool(name="python_repl")
 async def python_repl(
     code: str,
     state: Annotated[CodingState, InjectedState] | None = None,

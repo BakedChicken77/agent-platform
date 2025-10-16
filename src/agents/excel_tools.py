@@ -15,6 +15,8 @@ except Exception:
 
 from langchain_core.tools import tool
 
+from core.observability import instrument_tool
+
 # =========================
 # Helpers & Data IO
 # =========================
@@ -215,6 +217,7 @@ def _coerce_types(df: "pd.DataFrame", types: Dict[str, str]) -> Tuple["pd.DataFr
 # =========================
 
 @tool
+@instrument_tool(name="EXCEL_FindHeaders")
 def EXCEL_FindHeaders(config_json: str) -> str:
     """
     Scan the top of a sheet to guess the header row.
@@ -268,6 +271,7 @@ def EXCEL_FindHeaders(config_json: str) -> str:
         return _err(f"Header detection failed: {e}")
 
 @tool
+@instrument_tool(name="EXCEL_Read")
 def EXCEL_Read(config_json: str) -> str:
     """
     Read Excel/CSV into JSON records with robust options.
@@ -311,6 +315,7 @@ def EXCEL_Read(config_json: str) -> str:
         return _err(f"Read failed: {e}")
 
 @tool
+@instrument_tool(name="EXCEL_MapSchema")
 def EXCEL_MapSchema(payload_json: str, mapping_json: str) -> str:
     """
     Normalize/rename/coerce/filter rows/cols according to per-workflow mapping rules.
@@ -458,6 +463,7 @@ def EXCEL_Validate(payload_json: str, rules_json: str) -> str:
         return _err(f"Validate failed: {e}")
 
 @tool
+@instrument_tool(name="EXCEL_Write")
 def EXCEL_Write(payload_json: str, output_json: str) -> str:
     """
     Write JSON records to Excel/CSV.
@@ -493,6 +499,7 @@ def EXCEL_Write(payload_json: str, output_json: str) -> str:
         return _err(f"Write failed: {e}")
 
 @tool
+@instrument_tool(name="EXCEL_ToMarkdown")
 def EXCEL_ToMarkdown(payload_json: str, max_rows: int = 50) -> str:
     """
     Render JSON records as a Markdown table (for user-facing summaries).
@@ -507,6 +514,7 @@ def EXCEL_ToMarkdown(payload_json: str, max_rows: int = 50) -> str:
         return _err(f"ToMarkdown failed: {e}")
 
 @tool
+@instrument_tool(name="EXCEL_ToCSVBytes")
 def EXCEL_ToCSVBytes(payload_json: str) -> str:
     """
     Return CSV as base64 string for transport between tools (if needed).

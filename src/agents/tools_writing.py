@@ -11,12 +11,15 @@ from langchain_experimental.utilities import PythonREPL
 from langchain_experimental.tools.python.tool import PythonREPLTool
 import math, numpy, matplotlib
 
+from core.observability import instrument_tool
+
 # _TEMP_DIRECTORY = TemporaryDirectory()
 # WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
 WORKING_DIRECTORY = Path(r'.\pythonrepl_sandbox')
 
 
 @tool
+@instrument_tool(name="create_outline")
 def create_outline(
     points: Annotated[List[str], "List of main points or sections."],
     file_name: Annotated[str, "File path to save the outline."],
@@ -29,6 +32,7 @@ def create_outline(
 
 
 @tool
+@instrument_tool(name="read_document")
 def read_document(
     file_name: Annotated[str, "File path to read the document from."],
     start: Annotated[Optional[int], "The start line. Default is 0"] = None,
@@ -43,6 +47,7 @@ def read_document(
 
 
 @tool
+@instrument_tool(name="write_document")
 def write_document(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "File path to save the document."],
@@ -54,6 +59,7 @@ def write_document(
 
 
 @tool
+@instrument_tool(name="edit_document")
 def edit_document(
     file_name: Annotated[str, "Path of the document to be edited."],
     inserts: Annotated[
@@ -95,6 +101,7 @@ repl = PythonREPL(globals=safe_globals)
 
 
 @tool
+@instrument_tool(name="python_repl_tool")
 def python_repl_tool(
     code: Annotated[str, "The python code to execute to generate your chart."],
 ):

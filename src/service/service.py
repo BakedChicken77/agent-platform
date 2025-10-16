@@ -23,6 +23,7 @@ from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
 from core import settings, get_settings, Settings, LoggingMiddleware
+from core.observability import activate_langfuse_run, sanitize_for_observability
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -133,7 +134,12 @@ def _get_user_id_from_claims(claims: dict) -> str:
 # -------------------------------------------------------------------------------
 
 
-async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) -> tuple[dict[str, Any], UUID]:
+async def _handle_input(
+    user_input: UserInput,
+    agent: AgentGraph,
+    claims: dict,
+    agent_id: str,
+) -> tuple[dict[str, Any], UUID, dict[str, Any]]:
     """
     Parse user input and handle any required interrupt resumption.
     Returns kwargs for agent invocation and the run_id.
@@ -190,7 +196,16 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
         "config": config,
     }
 
-    return kwargs, run_id
+    context_info = {
+        "trace_id": str(run_id),
+        "thread_id": thread_id,
+        "user_id": internal_user,
+        "agent_id": agent_id,
+        "model": configurable.get("model"),
+        "input_message": user_input.message,
+    }
+
+    return kwargs, run_id, context_info
 
 
 @router.post("/{agent_id}/invoke")
@@ -202,24 +217,49 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
     Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent, getattr(request.state, "user", {}) or {})
+    kwargs, run_id, run_context = await _handle_input(
+        user_input, agent, getattr(request.state, "user", {}) or {}, agent_id
+    )
 
     try:
-        response_events: list[tuple[str, Any]] = await agent.ainvoke(
-            **kwargs, stream_mode=["updates", "values"]
-        )  # type: ignore # fmt: skip
-        response_type, response = response_events[-1]
-        if response_type == "values":
-            # Normal response, the agent completed successfully
-            output = langchain_to_chat_message(response["messages"][-1])
-        elif response_type == "updates" and "__interrupt__" in response:
-            # The last thing to occur was an interrupt
-            # Return the value of the first interrupt as an AIMessage
-            output = langchain_to_chat_message(
-                AIMessage(content=response["__interrupt__"][0].value)
-            )
-        else:
-            raise ValueError(f"Unexpected response type: {response_type}")
+        with activate_langfuse_run(
+            trace_id=run_context["trace_id"],
+            name=f"{agent_id}.invoke",
+            user_id=run_context["user_id"],
+            session_id=run_context.get("thread_id"),
+            input_payload={"message": user_input.message},
+            metadata={
+                "agent_id": agent_id,
+                "mode": "invoke",
+                "model": run_context.get("model"),
+            },
+        ) as run_span:
+            response_events: list[tuple[str, Any]] = await agent.ainvoke(
+                **kwargs, stream_mode=["updates", "values"]
+            )  # type: ignore # fmt: skip
+            response_type, response = response_events[-1]
+            run_span.add_metadata(response_type=response_type)
+            if response_type == "values":
+                output = langchain_to_chat_message(response["messages"][-1])
+                run_span.set_output(
+                    {
+                        "message_type": output.type,
+                        "content": sanitize_for_observability(output.content),
+                    }
+                )
+            elif response_type == "updates" and "__interrupt__" in response:
+                interrupt_message = response["__interrupt__"][0]
+                run_span.set_output(
+                    {
+                        "message_type": "interrupt",
+                        "content": sanitize_for_observability(interrupt_message.value),
+                    }
+                )
+                output = langchain_to_chat_message(
+                    AIMessage(content=interrupt_message.value)
+                )
+            else:
+                raise ValueError(f"Unexpected response type: {response_type}")
 
         output.run_id = str(run_id)
         return output
@@ -228,125 +268,155 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
         raise HTTPException(status_code=500, detail="Unexpected error")
 
 
+
 async def message_generator(
     user_input: StreamInput, agent_id: str, claims: dict
 ) -> AsyncGenerator[str, None]:
-    """
-    Generate a stream of messages from the agent.
-
-    Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
-    """
+    """Generate LangGraph SSE stream for an agent invocation."""
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent, claims)
+    kwargs, run_id, run_context = await _handle_input(user_input, agent, claims, agent_id)
+
+    updates_count = 0
+    custom_count = 0
+    tokens_count = 0
+    messages_count = 0
 
     try:
-        # Process streamed events from the graph and yield messages over the SSE stream.
-        async for stream_event in agent.astream(
-            **kwargs, stream_mode=["updates", "messages", "custom"], subgraphs=True
-        ):
-            if not isinstance(stream_event, tuple):
-                continue
-            # Handle different stream event structures based on subgraphs
-            if len(stream_event) == 3:
-                # With subgraphs=True: (node_path, stream_mode, event)
-                _, stream_mode, event = stream_event
-            else:
-                # Without subgraphs: (stream_mode, event)
-                stream_mode, event = stream_event
-            new_messages = []
-            if stream_mode == "updates":
-                for node, updates in event.items():
-                    # A simple approach to handle agent interrupts.
-                    if node == "__interrupt__":
-                        interrupt: Interrupt
-                        for interrupt in updates:
-                            new_messages.append(AIMessage(content=interrupt.value))
+        with activate_langfuse_run(
+            trace_id=run_context["trace_id"],
+            name=f"{agent_id}.stream",
+            user_id=run_context["user_id"],
+            session_id=run_context.get("thread_id"),
+            input_payload={
+                "message": user_input.message,
+                "stream_tokens": getattr(user_input, "stream_tokens", False),
+            },
+            metadata={
+                "agent_id": agent_id,
+                "mode": "stream",
+                "model": run_context.get("model"),
+            },
+        ) as run_span:
+            stream_error: Exception | None = None
+            try:
+                async for stream_event in agent.astream(
+                    **kwargs, stream_mode=["updates", "messages", "custom"], subgraphs=True
+                ):
+                    if not isinstance(stream_event, tuple):
                         continue
-                    updates = updates or {}
-                    update_messages = updates.get("messages", [])
-                    # special cases for using langgraph-supervisor library
-                    if node == "supervisor":
-                        # Get only the last ToolMessage since it is added by the
-                        # langgraph lib and not actual AI output so it won't be an
-                        # independent event
-                        if isinstance(update_messages[-1], ToolMessage):
-                            update_messages = [update_messages[-1]]
+                    if len(stream_event) == 3:
+                        _, stream_mode, event = stream_event
+                    else:
+                        stream_mode, event = stream_event
+
+                    new_messages = []
+                    if stream_mode == "updates":
+                        updates_count += 1
+                        for node, updates in event.items():
+                            if node == "__interrupt__":
+                                interrupt: Interrupt
+                                for interrupt in updates:
+                                    new_messages.append(AIMessage(content=interrupt.value))
+                                continue
+                            updates = updates or {}
+                            update_messages = updates.get("messages", [])
+                            if node == "supervisor":
+                                if update_messages and isinstance(update_messages[-1], ToolMessage):
+                                    update_messages = [update_messages[-1]]
+                                else:
+                                    update_messages = []
+
+                            if node in ("research_expert", "math_expert", "team_supervisor"):
+                                update_messages = []
+                            new_messages.extend(update_messages)
+
+                    if stream_mode == "custom":
+                        custom_count += 1
+                        new_messages = [event]
+
+                    processed_messages = []
+                    current_message: dict[str, Any] = {}
+                    for message in new_messages:
+                        if isinstance(message, tuple):
+                            key, value = message
+                            current_message[key] = value
                         else:
-                            update_messages = []
+                            if current_message:
+                                processed_messages.append(_create_ai_message(current_message))
+                                current_message = {}
+                            processed_messages.append(message)
 
-                    if node in ("research_expert", "math_expert", "team_supervisor"):
-                        update_messages = []
-                    new_messages.extend(update_messages)
-
-            if stream_mode == "custom":
-                new_messages = [event]
-
-            # LangGraph streaming may emit tuples: (field_name, field_value)
-            # e.g. ('content', <str>), ('tool_calls', [ToolCall,...]), ('additional_kwargs', {...}), etc.
-            # We accumulate only supported fields into `parts` and skip unsupported metadata.
-            # More info at: https://langchain-ai.github.io/langgraph/cloud/how-tos/stream_messages/
-            processed_messages = []
-            current_message: dict[str, Any] = {}
-            for message in new_messages:
-                if isinstance(message, tuple):
-                    key, value = message
-                    # Store parts in temporary dict
-                    current_message[key] = value
-                else:
-                    # Add complete message if we have one in progress
                     if current_message:
                         processed_messages.append(_create_ai_message(current_message))
-                        current_message = {}
-                    processed_messages.append(message)
 
-            # Add any remaining message parts
-            if current_message:
-                processed_messages.append(_create_ai_message(current_message))
+                    if processed_messages:
+                        messages_count += len(processed_messages)
 
-            for message in processed_messages:
-                try:
-                    chat_message = langchain_to_chat_message(message)
-                    chat_message.run_id = str(run_id)
-                except Exception as e:
-                    logger.error(f"Error parsing message: {e}")
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
-                    continue
-                # LangGraph re-sends the input message; drop it
-                if isinstance(user_input, StreamInput) and chat_message.type == "human" and chat_message.content == user_input.message:
-                    continue
-                yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+                    for message in processed_messages:
+                        try:
+                            chat_message = langchain_to_chat_message(message)
+                            chat_message.run_id = str(run_id)
+                        except Exception as e:
+                            logger.error(f"Error parsing message: {e}")
+                            yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
+                            continue
+                        if (
+                            isinstance(user_input, StreamInput)
+                            and chat_message.type == "human"
+                            and chat_message.content == user_input.message
+                        ):
+                            continue
+                        yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
-            if stream_mode == "messages":
-                if not user_input.stream_tokens:
-                    continue
-                msg, metadata = event
-                if "skip_stream" in metadata.get("tags", []):
-                    continue
-                # Drop non-LLM nodes
-                if not isinstance(msg, AIMessageChunk):
-                    continue
-                content = remove_tool_calls(msg.content)
-                if content:
-                    text = convert_message_content_to_string(content)
+                    if stream_mode == "messages":
+                        if not user_input.stream_tokens:
+                            continue
+                        msg, metadata = event
+                        if "skip_stream" in metadata.get("tags", []):
+                            continue
+                        if not isinstance(msg, AIMessageChunk):
+                            continue
+                        content = remove_tool_calls(msg.content)
+                        if content:
+                            text = convert_message_content_to_string(content)
 
-                    # Detect plot payload markers and emit as custom SSE
-                    if text.startswith("PLOTLY_JSON:"):
-                        payload = text[len("PLOTLY_JSON:"):]
-                        yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
-                        continue
-                    if text.startswith("DATA_URI:"):
-                        payload = text[len("DATA_URI:"):]
-                        yield f"data: {json.dumps({'type':'event', 'event':'image', 'content': payload})}\n\n"
-                        continue
+                            if text.startswith("PLOTLY_JSON:"):
+                                payload = text[len("PLOTLY_JSON:"):]
+                                yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
+                                continue
+                            if text.startswith("DATA_URI:"):
+                                payload = text[len("DATA_URI:"):]
+                                yield f"data: {json.dumps({'type':'event', 'event':'image', 'content': payload})}\n\n"
+                                continue
 
-                    # default token streaming
-                    yield f"data: {json.dumps({'type':'token', 'content': text})}\n\n"
+                            tokens_count += 1
+                            yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+            except Exception as exc:
+                stream_error = exc
+                run_span.add_metadata(stream_error=str(exc))
+                raise
+            finally:
+                run_span.add_metadata(
+                    updates_emitted=updates_count,
+                    custom_events=custom_count,
+                    tokens_streamed=tokens_count,
+                    messages_emitted=messages_count,
+                )
+                if stream_error is None:
+                    run_span.set_output(
+                        {
+                            "status": "stream_complete",
+                            "updates_emitted": updates_count,
+                            "custom_events": custom_count,
+                            "tokens_streamed": tokens_count,
+                            "messages_emitted": messages_count,
+                        }
+                    )
     except Exception as e:
         logger.error(f"Error in message generator: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
     finally:
         yield "data: [DONE]\n\n"
-
 
 def _create_ai_message(parts: dict) -> AIMessage:
     sig = inspect.signature(AIMessage)

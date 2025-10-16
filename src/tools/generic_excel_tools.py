@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import shutil
 
+from core.observability import instrument_tool
+
 def create_backup(file_path: str) -> str:
     """
     Creates a backup of the Excel file before modification.
@@ -235,6 +237,7 @@ def apply_row_style_based_on_status(sheet, row_idx: int, status_col_idx: Optiona
                     )
 
 @tool
+@instrument_tool(name="update_cell_in_unstructured_sheet")
 def update_cell_in_unstructured_sheet(file_path: str, search_value: str, column_header: Union[str, int], new_value: Any) -> str:
     """
     Performs a robust update on a single cell in a sheet with multiple, unstructured tables (like the 'BID' file).
@@ -347,6 +350,7 @@ def update_cell_in_unstructured_sheet(file_path: str, search_value: str, column_
         return f"An unexpected error occurred during robust update: {e}"
 
 @tool
+@instrument_tool(name="insert_row_after_anchor")
 def insert_row_after_anchor(file_path: str, anchor_text: str, row_data: List[str], position: str = "below") -> str:
     """
     Inserts a new row above or below a row containing the anchor text.
@@ -440,6 +444,7 @@ def insert_row_after_anchor(file_path: str, anchor_text: str, row_data: List[str
         return f"An unexpected error occurred while inserting row: {e}"
 
 @tool
+@instrument_tool(name="insert_row_at_position")
 def insert_row_at_position(file_path: str, sheet_name: str, row_number: int, row_data: List[str]) -> str:
     """
     Inserts a new row at a specific row number in a named sheet.
@@ -515,6 +520,7 @@ def insert_row_at_position(file_path: str, sheet_name: str, row_number: int, row
         return f"An unexpected error occurred while inserting row: {e}"
 
 @tool
+@instrument_tool(name="apply_styling_to_all_rows")
 def apply_styling_to_all_rows(file_path: str) -> str:
     """
     Applies appropriate styling to all rows in the Excel file based on their Status values.
@@ -560,6 +566,7 @@ def apply_styling_to_all_rows(file_path: str) -> str:
         return f"An unexpected error occurred while applying styling: {e}"
 
 @tool
+@instrument_tool(name="find_and_add_row_in_excel")
 def find_and_add_row_in_excel(file_path: str, anchor_text: str, row_data: List[str], insert_mode: bool = True) -> str:
     """
     Adds a new row under a section identified by `anchor_text`.
@@ -660,6 +667,7 @@ def find_and_add_row_in_excel(file_path: str, anchor_text: str, row_data: List[s
         return f"An unexpected error occurred: {e}"
 
 @tool
+@instrument_tool(name="update_row")
 def update_row(file_path: str, sheet_name: str, search_value: str, new_data: Dict[str, Any]) -> str:
     """
     Use this tool ONLY for structured sheets where headers are in the FIRST row.
@@ -716,6 +724,7 @@ def update_row(file_path: str, sheet_name: str, search_value: str, new_data: Dic
         return f"An unexpected error occurred during update: {e}"
 
 @tool
+@instrument_tool(name="delete_row")
 def delete_row(file_path: str, sheet_name: str, search_value: str) -> str:
     """
     Performs a "smart" deletion. It truly removes the row and shifts cells up, while intelligently preserving the sheet's structure, including merged cells.
@@ -768,6 +777,7 @@ def delete_row(file_path: str, sheet_name: str, search_value: str) -> str:
         return f"An unexpected error occurred during smart deletion: {e}"
 
 @tool
+@instrument_tool(name="list_sheets")
 def list_sheets(file_path: str) -> str:
     """Lists all sheet names in the Excel file."""
     print(f"--- TOOL CALLED: list_sheets for file '{file_path}' ---")
@@ -780,6 +790,7 @@ def list_sheets(file_path: str) -> str:
         return f"An error occurred while listing sheets: {e}"
 
 @tool
+@instrument_tool(name="inspect_excel_file")
 def inspect_excel_file(file_path: str) -> str:
     """Inspects an Excel file to understand its structure, such as sheet names and column headers."""
     print(f"--- TOOL CALLED: inspect_excel_file for file '{file_path}' ---")
@@ -800,6 +811,7 @@ def inspect_excel_file(file_path: str) -> str:
         return f"Error reading Excel file: {e}."
 
 @tool
+@instrument_tool(name="answer_question_from_excel")
 def answer_question_from_excel(file_path: str, question: str) -> str:
     """Answers a specific question about the content of an Excel file by reading the entire file."""
     print(f"--- TOOL CALLED: answer_question_from_excel for question '{question}' ---")
@@ -816,6 +828,7 @@ def answer_question_from_excel(file_path: str, question: str) -> str:
         return f"Error reading Excel file: {e}"
 
 @tool
+@instrument_tool(name="add_row_to_named_sheet")
 def add_row_to_named_sheet(file_path: str, sheet_name: str, row_data: List[str]) -> str:
     """
     Adds a new row to the end of a SPECIFICALLY NAMED sheet. Use for structured tables.
