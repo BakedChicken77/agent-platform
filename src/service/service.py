@@ -39,6 +39,7 @@ from service.utils import (
     langchain_to_chat_message,
     remove_tool_calls,
 )
+from service.tracing import complete_run_trace, start_run_trace
 
 from service.auth import verify_jwt
 from auth.middleware import AuthMiddleware
@@ -133,7 +134,12 @@ def _get_user_id_from_claims(claims: dict) -> str:
 # -------------------------------------------------------------------------------
 
 
-async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) -> tuple[dict[str, Any], UUID]:
+async def _handle_input(
+    user_input: UserInput,
+    agent: AgentGraph,
+    claims: dict,
+    agent_id: str,
+) -> tuple[dict[str, Any], UUID, str]:
     """
     Parse user input and handle any required interrupt resumption.
     Returns kwargs for agent invocation and the run_id.
@@ -142,6 +148,7 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
     """
     run_id = uuid4()
     thread_id = user_input.thread_id or str(uuid4())
+    trace_id = user_input.trace_id or str(run_id)
 
     # Canonical identity from JWT (no tenant prefix)
     internal_user = _get_user_id_from_claims(claims or {})
@@ -151,6 +158,7 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
         "model": user_input.model,
         "user_id": internal_user,
     }
+    configurable["trace_id"] = trace_id
 
     callbacks = []
     if settings.LANGFUSE_TRACING:
@@ -190,7 +198,17 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
         "config": config,
     }
 
-    return kwargs, run_id
+    if settings.LANGFUSE_TRACING:
+        start_run_trace(
+            run_id=str(run_id),
+            trace_id=trace_id,
+            agent_id=agent_id,
+            user_id=internal_user,
+            thread_id=thread_id,
+            input_message=user_input.message,
+        )
+
+    return kwargs, run_id, trace_id
 
 
 @router.post("/{agent_id}/invoke")
@@ -202,7 +220,12 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
     Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent, getattr(request.state, "user", {}) or {})
+    kwargs, run_id, trace_id = await _handle_input(
+        user_input,
+        agent,
+        getattr(request.state, "user", {}) or {},
+        agent_id,
+    )
 
     try:
         response_events: list[tuple[str, Any]] = await agent.ainvoke(
@@ -222,9 +245,22 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
             raise ValueError(f"Unexpected response type: {response_type}")
 
         output.run_id = str(run_id)
+        output.trace_id = trace_id
+        if settings.LANGFUSE_TRACING:
+            complete_run_trace(
+                run_id=str(run_id),
+                output_message=output.content,
+                error=None,
+            )
         return output
     except Exception as e:
         logger.error(f"An exception occurred: {e}")
+        if settings.LANGFUSE_TRACING:
+            complete_run_trace(
+                run_id=str(run_id),
+                output_message=None,
+                error=str(e),
+            )
         raise HTTPException(status_code=500, detail="Unexpected error")
 
 
@@ -237,8 +273,10 @@ async def message_generator(
     Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent, claims)
+    kwargs, run_id, trace_id = await _handle_input(user_input, agent, claims, agent_id)
 
+    final_output: str | None = None
+    error_message: str | None = None
     try:
         # Process streamed events from the graph and yield messages over the SSE stream.
         async for stream_event in agent.astream(
@@ -307,6 +345,7 @@ async def message_generator(
                 try:
                     chat_message = langchain_to_chat_message(message)
                     chat_message.run_id = str(run_id)
+                    chat_message.trace_id = trace_id
                 except Exception as e:
                     logger.error(f"Error parsing message: {e}")
                     yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
@@ -314,6 +353,8 @@ async def message_generator(
                 # LangGraph re-sends the input message; drop it
                 if isinstance(user_input, StreamInput) and chat_message.type == "human" and chat_message.content == user_input.message:
                     continue
+                if chat_message.type == "ai" and chat_message.content:
+                    final_output = chat_message.content
                 yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
 
             if stream_mode == "messages":
@@ -343,8 +384,15 @@ async def message_generator(
                     yield f"data: {json.dumps({'type':'token', 'content': text})}\n\n"
     except Exception as e:
         logger.error(f"Error in message generator: {e}")
+        error_message = str(e)
         yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
     finally:
+        if settings.LANGFUSE_TRACING:
+            complete_run_trace(
+                run_id=str(run_id),
+                output_message=final_output,
+                error=error_message,
+            )
         yield "data: [DONE]\n\n"
 
 

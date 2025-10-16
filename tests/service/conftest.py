@@ -1,4 +1,5 @@
 
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -6,6 +7,8 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from service import app
+from service import tracing
+from auth.middleware import AuthMiddleware
 
 
 @pytest.fixture
@@ -27,10 +30,58 @@ def mock_agent():
 
 
 @pytest.fixture
+def mock_langfuse(mock_settings):
+    """Provide a mock Langfuse client so tests can assert tracing behaviour."""
+
+    tracing.reset_tracing_state()
+    langfuse_client = Mock()
+    trace_client = Mock()
+    span_client = Mock()
+    langfuse_client.trace.return_value = trace_client
+    langfuse_client.span.return_value = span_client
+
+    with patch.object(tracing, "get_shared_client", return_value=langfuse_client):
+        original = mock_settings.LANGFUSE_TRACING
+        mock_settings.LANGFUSE_TRACING = True
+        yield {
+            "client": langfuse_client,
+            "trace": trace_client,
+            "span": span_client,
+        }
+        mock_settings.LANGFUSE_TRACING = original
+
+
+@pytest.fixture
 def mock_settings(mock_env):
     """Fixture to ensure settings are clean for each test."""
-    with patch("service.service.settings") as mock_settings:
-        yield mock_settings
+    with ExitStack() as stack:
+        service_settings = stack.enter_context(patch("service.service.settings"))
+        stack.enter_context(patch("service.tracing.settings", service_settings))
+
+        service_settings.AUTH_ENABLED = False
+        service_settings.AZURE_AD_TENANT_ID = "test-tenant"
+        service_settings.AZURE_AD_API_CLIENT_ID = "test-api-client"
+        service_settings.WHITELIST = set()
+        service_settings.LANGFUSE_TRACING = False
+
+        def refresh_auth_middleware() -> None:
+            for middleware in app.user_middleware:
+                if middleware.cls is AuthMiddleware:
+                    middleware.kwargs["settings"] = service_settings
+                    break
+            app.middleware_stack = app.build_middleware_stack()
+
+        refresh_auth_middleware()
+        service_settings.refresh_auth_middleware = refresh_auth_middleware
+        yield service_settings
+
+    for middleware in app.user_middleware:
+        if middleware.cls is AuthMiddleware:
+            middleware.kwargs["settings"] = __import__(
+                "service.service", fromlist=["settings"]
+            ).settings
+            break
+    app.middleware_stack = app.build_middleware_stack()
 
 
 @pytest.fixture

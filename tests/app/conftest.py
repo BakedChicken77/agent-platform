@@ -24,5 +24,6 @@ def mock_agent_client(mock_env):
     with patch("client.AgentClient") as mock_agent_client:
         mock_agent_client_instance = mock_agent_client.return_value
         mock_agent_client_instance.info = mock_info
+        mock_agent_client_instance.trace_id = None
         yield mock_agent_client_instance
 

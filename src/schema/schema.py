@@ -44,6 +44,11 @@ class UserInput(BaseModel):
         description="User input to the agent.",
         examples=["What is the weather in Tokyo?"],
     )
+    trace_id: str | None = Field(
+        description="Trace identifier used for correlating Langfuse telemetry across requests.",
+        default=None,
+        examples=["trace_a1b2c3"],
+    )
     model: SerializeAsAny[AllModelEnum] | None = Field(
         title="Model",
         description="LLM Model to use for the agent.",
@@ -98,6 +103,11 @@ class ChatMessage(BaseModel):
     content: str = Field(
         description="Content of the message.",
         examples=["Hello, world!"],
+    )
+    trace_id: str | None = Field(
+        description="Trace identifier associated with this message for telemetry correlation.",
+        default=None,
+        examples=["trace_a1b2c3"],
     )
     tool_calls: list[ToolCall] = Field(
         description="Tool calls in the message.",

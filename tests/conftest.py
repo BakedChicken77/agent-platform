@@ -26,6 +26,19 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def mock_env():
     """Fixture to ensure environment is clean for each test."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "USE_FAKE_MODEL": "true",
+            "LANGFUSE_PUBLIC_KEY": "pk_test",
+            "LANGFUSE_SECRET_KEY": "sk_test",
+            "LANGFUSE_HOST": "https://example.com",
+            "AUTH_ENABLED": "false",
+            "AZURE_AD_TENANT_ID": "test-tenant",
+            "AZURE_AD_API_CLIENT_ID": "test-api-client",
+            "DISABLE_FEEDBACK_WIDGET": "true",
+        },
+        clear=True,
+    ):
         yield
 

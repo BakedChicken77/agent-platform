@@ -3,7 +3,6 @@ import os
 from unittest.mock import patch
 
 import pytest
-from langchain_anthropic import ChatAnthropic
 from langchain_community.chat_models import FakeListChatModel
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
@@ -11,7 +10,6 @@ from langchain_openai import ChatOpenAI
 
 from core.llm import get_model
 from schema.models import (
-    AnthropicModelName,
     FakeModelName,
     GroqModelName,
     OllamaModelName,
@@ -24,16 +22,7 @@ def test_get_model_openai():
         model = get_model(OpenAIModelName.GPT_4O_MINI)
         assert isinstance(model, ChatOpenAI)
         assert model.model_name == "gpt-4o-mini"
-        assert model.temperature == 0.5
-        assert model.streaming is True
-
-
-def test_get_model_anthropic():
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test_key"}):
-        model = get_model(AnthropicModelName.HAIKU_3)
-        assert isinstance(model, ChatAnthropic)
-        assert model.model == "claude-3-haiku"
-        assert model.temperature == 0.5
+        assert model.temperature == 0.05
         assert model.streaming is True
 
 
@@ -42,7 +31,7 @@ def test_get_model_groq():
         model = get_model(GroqModelName.LLAMA_31_8B)
         assert isinstance(model, ChatGroq)
         assert model.model_name == "llama-3.1-8b"
-        assert model.temperature == 0.5
+        assert model.temperature == 0.05
 
 
 def test_get_model_groq_guard():
@@ -58,7 +47,7 @@ def test_get_model_ollama():
         model = get_model(OllamaModelName.OLLAMA_GENERIC)
         assert isinstance(model, ChatOllama)
         assert model.model == "llama3.3"
-        assert model.temperature == 0.5
+        assert model.temperature == 0.05
 
 
 def test_get_model_fake():

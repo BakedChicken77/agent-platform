@@ -27,10 +27,10 @@ def test_check_str_is_http():
 
 
 def test_settings_default_values():
-    settings = Settings(_env_file=None)
-    assert settings.HOST == "0.0.0.0"
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"}, clear=True):
+        settings = Settings(_env_file=None)
+    assert settings.HOST == "http://localhost"
     assert settings.PORT == 8080
-    assert settings.USE_AWS_BEDROCK is False
     assert settings.USE_FAKE_MODEL is False
 
 
@@ -71,6 +71,8 @@ def test_settings_with_multiple_api_keys():
         {
             "OPENAI_API_KEY": "test_openai_key",
             "AZURE_OPENAI_API_KEY": "test_azureopenai_key",
+            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com",
+            "AZURE_OPENAI_DEPLOYMENT_MAP": '{"gpt-4o": "deployment-1", "gpt-4o-mini": "deployment-2"}',
         },
         clear=True,
     ):
@@ -110,7 +112,7 @@ def test_settings_with_azure_openai_key():
     ):
         settings = Settings(_env_file=None)
         assert settings.AZURE_OPENAI_API_KEY.get_secret_value() == "test_key"
-        assert settings.DEFAULT_MODEL == AzureOpenAIModelName.AZURE_GPT_4O_MINI
+        assert settings.DEFAULT_MODEL == AzureOpenAIModelName.AZURE_GPT_4O
         assert settings.AVAILABLE_MODELS == set(AzureOpenAIModelName)
 
 

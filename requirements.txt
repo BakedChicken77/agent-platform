@@ -158,6 +158,7 @@ pluggy==1.6.0
 posthog==5.4.0
 pre-commit==4.2.0
 primp==0.15.0
+python-multipart==0.0.20
 propcache==0.3.2
 proto-plus==1.26.1
 protobuf==5.29.5

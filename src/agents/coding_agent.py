@@ -5,7 +5,7 @@ import inspect
 import io
 import math
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Optional, TYPE_CHECKING
 
 import matplotlib
 
@@ -28,7 +28,12 @@ from typing_extensions import TypedDict, Annotated
 from core import get_model, settings
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langgraph.graph.message import add_messages
-from service import catalog_postgres
+# NOTE: Importing `service` at module import time creates a circular dependency
+# when FastAPI wires agents during startup.  Delay access to catalog helpers
+# until they are actually needed.
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    from service import catalog_postgres
 
 import builtins
 
@@ -71,6 +76,7 @@ def _extract_runtime_ids(state: MessagesState) -> tuple[Optional[str], Optional[
 async def _load_user_uploads(user_id: Optional[str], thread_id: Optional[str]) -> list[Any]:
     if not user_id:
         return []
+    from service import catalog_postgres  # Local import to avoid circular dependency
     try:
         records = catalog_postgres.list_metadata(user_id=user_id, thread_id=thread_id)
         if inspect.isawaitable(records):

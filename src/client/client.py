@@ -50,6 +50,7 @@ class AgentClient:
         self.timeout = timeout
         self.info: ServiceMetadata | None = None
         self.agent: str | None = None
+        self._trace_id: str | None = None
         if get_info:
             self.retrieve_info()
         if agent:
@@ -69,6 +70,22 @@ class AgentClient:
         elif self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
+
+    @property
+    def trace_id(self) -> str | None:
+        return self._trace_id
+
+    @trace_id.setter
+    def trace_id(self, value: str | None) -> None:
+        self._trace_id = value
+
+    def _apply_trace_context(self, request: UserInput | StreamInput) -> None:
+        if self._trace_id:
+            request.trace_id = self._trace_id  # type: ignore[assignment]
+
+    def _update_trace_context(self, message: ChatMessage | None) -> None:
+        if isinstance(message, ChatMessage) and message.trace_id:
+            self._trace_id = message.trace_id
 
     def retrieve_info(self) -> None:
         try:
@@ -125,6 +142,7 @@ class AgentClient:
             request.model = model  # type: ignore[assignment]
         if agent_config:
             request.agent_config = agent_config
+        self._apply_trace_context(request)
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -137,7 +155,9 @@ class AgentClient:
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")
 
-        return ChatMessage.model_validate(response.json())
+        message = ChatMessage.model_validate(response.json())
+        self._update_trace_context(message)
+        return message
 
     def invoke(
         self,
@@ -168,6 +188,7 @@ class AgentClient:
             request.model = model  # type: ignore[assignment]
         if agent_config:
             request.agent_config = agent_config
+        self._apply_trace_context(request)
         try:
             response = httpx.post(
                 f"{self.base_url}/{self.agent}/invoke",
@@ -179,7 +200,9 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(f"Error: {e}")
 
-        return ChatMessage.model_validate(response.json())
+        message = ChatMessage.model_validate(response.json())
+        self._update_trace_context(message)
+        return message
 
     def _parse_stream_line(self, line: str) -> ChatMessage | str | None:
         line = line.strip()
@@ -256,6 +279,8 @@ class AgentClient:
                         parsed = self._parse_stream_line(line)
                         if parsed is None:
                             break
+                        if isinstance(parsed, ChatMessage):
+                            self._update_trace_context(parsed)
                         yield parsed
         except httpx.HTTPError as e:
             raise AgentClientError(f"Error: {e}")
@@ -312,6 +337,8 @@ class AgentClient:
                             parsed = self._parse_stream_line(line)
                             if parsed is None:
                                 break
+                            if isinstance(parsed, ChatMessage):
+                                self._update_trace_context(parsed)
                             yield parsed
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")

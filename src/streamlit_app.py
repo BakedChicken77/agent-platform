@@ -49,14 +49,22 @@ CLIENT_ID = os.getenv("AZURE_AD_CLIENT_ID")
 CLIENT_SECRET = os.getenv("AZURE_AD_CLIENT_SECRET")
 # The redirect URI must match one of those registered in your Azure AD app
 REDIRECT_URI = os.getenv("STREAMLIT_REDIRECT_URI")  # e.g. "https://your-streamlit-app.azurewebsites.net/"
-AUTHORITY = f"https://login.microsoftonline.us/{TENANT_ID}"
-# Scope should include your API's custom scope; replace with your actual scope URI
-SCOPE = [f"api://{os.getenv('AZURE_AD_API_CLIENT_ID')}/access_as_user"]
-msal_app = msal.ConfidentialClientApplication(
-    CLIENT_ID,
-    authority=AUTHORITY,
-    client_credential=CLIENT_SECRET,
-)
+AUTHORITY = f"https://login.microsoftonline.us/{TENANT_ID}" if TENANT_ID else None
+
+api_client_id = os.getenv("AZURE_AD_API_CLIENT_ID")
+SCOPE = [f"api://{api_client_id}/access_as_user"] if api_client_id else []
+try:
+    msal_app = (
+        msal.ConfidentialClientApplication(
+            CLIENT_ID,
+            authority=AUTHORITY,
+            client_credential=CLIENT_SECRET,
+        )
+        if AUTHORITY and CLIENT_ID and CLIENT_SECRET
+        else None
+    )
+except ValueError:
+    msal_app = None
 
 # ——— Auth Toggle ———
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
@@ -187,6 +195,11 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
 
     # ——— Handle OAuth2 redirect & token exchange ———
     if AUTH_ENABLED:
+        if msal_app is None or not SCOPE or not REDIRECT_URI:
+            st.error(
+                "Authentication is enabled but the Azure AD configuration is incomplete."
+            )
+            return
         params = st.query_params
         if "code" in params and "access_token" not in st.session_state:
             code = params["code"][0]
@@ -279,6 +292,11 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
             st.stop()
     agent_client: AgentClient = st.session_state.agent_client
 
+    if "trace_id" not in st.session_state:
+        st.session_state.trace_id = None
+    else:
+        agent_client.trace_id = st.session_state.trace_id
+
     if "thread_id" not in st.session_state:
         thread_id = st.query_params.get("thread_id")
         if not thread_id:
@@ -292,6 +310,12 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                 messages = []
         st.session_state.messages = messages
         st.session_state.thread_id = thread_id
+        if messages:
+            st.session_state.trace_id = messages[-1].trace_id
+            agent_client.trace_id = st.session_state.trace_id
+        else:
+            st.session_state.trace_id = None
+            agent_client.trace_id = None
 
     # Config options
     with st.sidebar:
@@ -300,12 +324,15 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
         ""
         "Full toolkit for running an AI agent service built with LangGraph, FastAPI and Streamlit"
         ""
+        use_streaming = st.toggle("Stream results", value=True)
         DEBUG = st.toggle("🔎 Debug mode", value=False)
         globals()["DEBUG"] = DEBUG  # <— ADD THIS
 
         if st.button(":material/chat: New Chat", use_container_width=True):
             st.session_state.messages = []
             st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.trace_id = None
+            agent_client.trace_id = None
             st.rerun()
 
         with st.popover(":material/settings: Agents/Workflows", use_container_width=True):
@@ -318,7 +345,6 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                 options=agent_list,
                 index=agent_idx,
             )
-            use_streaming = st.toggle("Stream results", value=True)
 
             # Display user ID (for debugging or user information)
             st.text_input("User ID (read-only)", value=user_id, disabled=True)
@@ -428,8 +454,9 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
             case _:
                 WELCOME = "Hello! I'm an AI agent. Ask me anything!"
 
-        with st.chat_message("ai"):
-            st.write(WELCOME)
+        welcome_message = ChatMessage(type="ai", content=WELCOME)
+        messages.append(welcome_message)
+        st.session_state.messages = messages
 
     # draw_messages() expects an async iterator over messages
     async def amessage_iter() -> AsyncGenerator[ChatMessage, None]:
@@ -444,6 +471,7 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
         st.chat_message("human").write(user_input)
         try:
             if use_streaming:
+                agent_client.trace_id = st.session_state.trace_id
                 stream = agent_client.astream(
                     message=user_input,
                     model=model,
@@ -451,7 +479,9 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 await draw_messages(stream, is_new=True)
+                st.session_state.trace_id = agent_client.trace_id
             else:
+                agent_client.trace_id = st.session_state.trace_id
                 response = await agent_client.ainvoke(
                     message=user_input,
                     model=model,
@@ -459,6 +489,9 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 messages.append(response)
+                if response.trace_id:
+                    st.session_state.trace_id = response.trace_id
+                    agent_client.trace_id = response.trace_id
                 st.chat_message("ai").write(response.content)
             st.rerun()  # Clear stale containers
         except AgentClientError as e:
@@ -466,7 +499,12 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
             st.stop()
 
     # If messages have been generated, show feedback widget
-    if len(messages) > 0 and st.session_state.last_message:
+    if (
+        len(messages) > 0
+        and st.session_state.last_message
+        and any(m.type == "human" for m in messages)
+        and os.getenv("DISABLE_FEEDBACK_WIDGET", "false").lower() != "true"
+    ):
         with st.session_state.last_message:
             await handle_feedback()
 
@@ -553,6 +591,9 @@ async def draw_messages(
                 # If we're rendering new messages, store the message in session state
                 if is_new:
                     st.session_state.messages.append(msg)
+                    if msg.trace_id:
+                        st.session_state.trace_id = msg.trace_id
+                        st.session_state.agent_client.trace_id = msg.trace_id
 
                 # If the last message type was not AI, create a new chat message
                 if last_message_type != "ai":
@@ -609,6 +650,9 @@ async def draw_messages(
                             # status container with the result
                             if is_new:
                                 st.session_state.messages.append(tool_result)
+                                if tool_result.trace_id:
+                                    st.session_state.trace_id = tool_result.trace_id
+                                    st.session_state.agent_client.trace_id = tool_result.trace_id
                             if tool_result.tool_call_id:
                                 status = call_results[tool_result.tool_call_id]
                             status.write("Output:")
@@ -634,6 +678,9 @@ async def draw_messages(
 
                 if is_new:
                     st.session_state.messages.append(msg)
+                    if msg.trace_id:
+                        st.session_state.trace_id = msg.trace_id
+                        st.session_state.agent_client.trace_id = msg.trace_id
 
                 if last_message_type != "task":
                     last_message_type = "task"

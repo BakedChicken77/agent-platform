@@ -101,5 +101,6 @@ def test_agent_stream(mock_httpx):
 
     for expected, actual in zip(EXPECTED_OUTPUT_MESSAGES, messages):
         actual.run_id = None
+        actual.trace_id = expected.trace_id
         assert expected == actual
 

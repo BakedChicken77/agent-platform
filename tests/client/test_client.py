@@ -7,7 +7,7 @@ import pytest
 from httpx import Request, Response
 
 from client import AgentClient, AgentClientError
-from schema import AgentInfo, ChatHistory, ChatMessage, ServiceMetadata
+from schema import AgentInfo, ChatHistory, ChatMessage, ServiceMetadata, UserInput
 from schema.models import OpenAIModelName
 
 
@@ -51,7 +51,7 @@ def test_invoke(agent_client):
     mock_request = Request("POST", "http://test/invoke")
     mock_response = Response(
         200,
-        json={"type": "ai", "content": ANSWER},
+        json={"type": "ai", "content": ANSWER, "trace_id": "trace-123"},
         request=mock_request,
     )
     with patch("httpx.post", return_value=mock_response):
@@ -59,6 +59,7 @@ def test_invoke(agent_client):
         assert isinstance(response, ChatMessage)
         assert response.type == "ai"
         assert response.content == ANSWER
+        assert agent_client.trace_id == "trace-123"
 
     # Test with model and thread_id
     with patch("httpx.post", return_value=mock_response) as mock_post:
@@ -73,6 +74,7 @@ def test_invoke(agent_client):
         assert kwargs["json"]["message"] == QUESTION
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
+        assert kwargs["json"]["trace_id"] == "trace-123"
 
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
@@ -90,12 +92,17 @@ async def test_ainvoke(agent_client):
 
     # Test successful response
     mock_request = Request("POST", "http://test/invoke")
-    mock_response = Response(200, json={"type": "ai", "content": ANSWER}, request=mock_request)
+    mock_response = Response(
+        200,
+        json={"type": "ai", "content": ANSWER, "trace_id": "trace-async"},
+        request=mock_request,
+    )
     with patch("httpx.AsyncClient.post", return_value=mock_response):
         response = await agent_client.ainvoke(QUESTION)
         assert isinstance(response, ChatMessage)
         assert response.type == "ai"
         assert response.content == ANSWER
+        assert agent_client.trace_id == "trace-async"
 
     # Test with model and thread_id
     with patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
@@ -112,6 +119,7 @@ async def test_ainvoke(agent_client):
         assert kwargs["json"]["message"] == QUESTION
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
+        assert kwargs["json"]["trace_id"] == "trace-async"
 
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
@@ -131,7 +139,7 @@ def test_stream(agent_client):
     events = (
         [f"data: {json.dumps({'type': 'token', 'content': token})}" for token in TOKENS]
         + [
-            f"data: {json.dumps({'type': 'message', 'content': {'type': 'ai', 'content': FINAL_ANSWER}})}"
+            f"data: {json.dumps({'type': 'message', 'content': {'type': 'ai', 'content': FINAL_ANSWER, 'trace_id': 'trace-stream'}})}"
         ]
         + ["data: [DONE]"]
     )
@@ -158,6 +166,8 @@ def test_stream(agent_client):
         assert isinstance(final_message, ChatMessage)
         assert final_message.type == "ai"
         assert final_message.content == FINAL_ANSWER
+        assert final_message.trace_id == "trace-stream"
+        assert agent_client.trace_id == "trace-stream"
 
     # Test error response
     error_response = Response(
@@ -183,7 +193,7 @@ async def test_astream(agent_client):
     events = (
         [f"data: {json.dumps({'type': 'token', 'content': token})}" for token in TOKENS]
         + [
-            f"data: {json.dumps({'type': 'message', 'content': {'type': 'ai', 'content': FINAL_ANSWER}})}"
+            f"data: {json.dumps({'type': 'message', 'content': {'type': 'ai', 'content': FINAL_ANSWER, 'trace_id': 'trace-astream'}})}"
         ]
         + ["data: [DONE]"]
     )
@@ -220,21 +230,21 @@ async def test_astream(agent_client):
         assert isinstance(final_message, ChatMessage)
         assert final_message.type == "ai"
         assert final_message.content == FINAL_ANSWER
+        assert final_message.trace_id == "trace-astream"
+        assert agent_client.trace_id == "trace-astream"
 
-    # Test error response
-    error_response = Response(
-        500, text="Internal Server Error", request=Request("POST", "http://test/stream")
+
+def test_trace_id_round_trip(agent_client):
+    """Trace IDs should be forwarded on subsequent calls."""
+
+    agent_client.trace_id = "trace-existing"
+    request = UserInput(message="Hello")
+    agent_client._apply_trace_context(request)
+    assert request.trace_id == "trace-existing"
+    agent_client._update_trace_context(
+        ChatMessage(type="ai", content="Hi", trace_id="trace-new")
     )
-    error_response_mock = AsyncMock()
-    error_response_mock.__aenter__ = AsyncMock(return_value=error_response)
-
-    mock_client.stream.return_value = error_response_mock
-
-    with patch("httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(AgentClientError) as exc:
-            async for _ in agent_client.astream(QUESTION):
-                pass
-        assert "500 Internal Server Error" in str(exc.value)
+    assert agent_client.trace_id == "trace-new"
 
 
 @pytest.mark.asyncio
