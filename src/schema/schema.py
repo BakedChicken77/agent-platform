@@ -158,8 +158,36 @@ class Feedback(BaseModel):  # type: ignore[no-redef]
     )
 
 
+class LangfuseTelemetryInfo(BaseModel):
+    """Details about Langfuse telemetry associated with a feedback submission."""
+
+    scored: bool = Field(
+        description="Whether Langfuse telemetry was recorded for this feedback.",
+        examples=[True],
+    )
+    trace_id: str | None = Field(
+        default=None,
+        description="Langfuse trace identifier when available.",
+        examples=["trace_123"],
+    )
+    trace_url: str | None = Field(
+        default=None,
+        description="Direct link to the Langfuse trace when available.",
+        examples=["https://cloud.langfuse.com/project/.../trace"],
+    )
+    detail: str | None = Field(
+        default=None,
+        description="Additional context about telemetry handling (e.g., missing trace).",
+        examples=["missing_trace_context"],
+    )
+
+
 class FeedbackResponse(BaseModel):
     status: Literal["success"] = "success"
+    langfuse: LangfuseTelemetryInfo | None = Field(
+        default=None,
+        description="Outcome of optional Langfuse telemetry recording.",
+    )
 
 
 class ChatHistoryInput(BaseModel):

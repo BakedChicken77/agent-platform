@@ -1,28 +1,30 @@
 ## src/service/service.py
 
-import os
 import inspect
 import json
 import logging
+import os
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, status, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse  # type: ignore[import-untyped]
 from langfuse.callback import CallbackHandler  # type: ignore[import-untyped]
-from langgraph.types import Command, Interrupt
+from langfuse.decorators import langfuse_context  # type: ignore[import-untyped]
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
-from core import settings, get_settings, Settings, LoggingMiddleware
+from auth.middleware import AuthMiddleware
+from core import LoggingMiddleware, Settings, get_settings
+from langgraph.types import Command, Interrupt
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -30,22 +32,19 @@ from schema import (
     ChatMessage,
     Feedback,
     FeedbackResponse,
+    LangfuseTelemetryInfo,
     ServiceMetadata,
     StreamInput,
     UserInput,
 )
+from service import catalog_postgres
+from service.files_router import router as files_router
+from service.storage import ensure_upload_root
 from service.utils import (
     convert_message_content_to_string,
     langchain_to_chat_message,
     remove_tool_calls,
 )
-
-from service.auth import verify_jwt
-from auth.middleware import AuthMiddleware
-
-from service.files_router import router as files_router
-from service.storage import ensure_upload_root
-from service import catalog_postgres
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
@@ -404,7 +403,41 @@ async def feedback(feedback: Feedback) -> FeedbackResponse:
         score=feedback.score,
         **kwargs,
     )
-    return FeedbackResponse()
+
+    langfuse_result: LangfuseTelemetryInfo | None = None
+    if settings.LANGFUSE_TRACING:
+        langfuse_kwargs: dict[str, Any] = {}
+        for key in ("comment", "data_type", "id", "config_id"):
+            if key in kwargs:
+                langfuse_kwargs[key] = kwargs[key]
+
+        try:
+            langfuse_context.score_current_trace(
+                name=feedback.key,
+                value=feedback.score,
+                **langfuse_kwargs,
+            )
+            langfuse_result = LangfuseTelemetryInfo(
+                scored=True,
+                trace_id=langfuse_context.get_current_trace_id(),
+                trace_url=langfuse_context.get_current_trace_url(),
+            )
+        except ValueError as exc:
+            logger.debug("Langfuse trace context unavailable for feedback: %s", exc)
+            langfuse_result = LangfuseTelemetryInfo(
+                scored=False,
+                detail="missing_trace_context",
+                trace_id=langfuse_context.get_current_trace_id(),
+                trace_url=langfuse_context.get_current_trace_url(),
+            )
+        except Exception as exc:  # pragma: no cover - best effort telemetry
+            logger.warning("Unable to record Langfuse score: %s", exc)
+            langfuse_result = LangfuseTelemetryInfo(
+                scored=False,
+                detail="langfuse_error",
+            )
+
+    return FeedbackResponse(langfuse=langfuse_result)
 
 
 @router.post("/history")

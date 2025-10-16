@@ -1,3 +1,5 @@
+from schema.files import FileMeta, ListFilesResponse, UploadResult
+from schema.index_context import ProgramContext
 from schema.models import AllModelEnum
 from schema.schema import (
     AgentInfo,
@@ -6,13 +8,11 @@ from schema.schema import (
     ChatMessage,
     Feedback,
     FeedbackResponse,
+    LangfuseTelemetryInfo,
     ServiceMetadata,
     StreamInput,
     UserInput,
 )
-
-from schema.index_context import ProgramContext
-from schema.files import FileMeta, UploadResult, ListFilesResponse
 
 __all__ = [
     "AgentInfo",
@@ -23,6 +23,7 @@ __all__ = [
     "StreamInput",
     "Feedback",
     "FeedbackResponse",
+    "LangfuseTelemetryInfo",
     "ChatHistoryInput",
     "ChatHistory",
     "ProgramContext",
