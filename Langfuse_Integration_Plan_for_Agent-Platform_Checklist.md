@@ -59,3 +59,35 @@
 * Uses `monkeypatch`, `sys.modules`, and `pytest` fixtures properly.
 * Clears internal caches to ensure clean test environments.
 
+### ✅ **Step 2 Checklist Review**
+
+#### 1. **Instrument `service.py` LangChain entrypoints**
+
+**✔ Done.**
+
+* Wrapped `agent.ainvoke()` inside a Langfuse span that records input/output metadata and tags `agent_id`, `thread_id`, and `user_id` via `LangfuseTelemetry`. Implemented in `service.py`'s `invoke` handler.
+
+#### 2. **Attach Langfuse handler to `RunnableConfig`**
+
+**✔ Done.**
+
+* Added `_prepare_langfuse_context()` to build per-request telemetry, configure callback handlers with `trace_id`, `session_id`, and `user_id`, and inject them into `RunnableConfig.callbacks` inside `_handle_input()`.
+
+#### 3. **Graceful exception handling**
+
+**✔ Done.**
+
+* Introduced `_end_span()` helper to flag errors with `level="ERROR"` and status messages, invoked from both `invoke` and streaming flows so traces remain inspectable after failures.
+
+#### 4. **Stream tracing for `message_generator`**
+
+**✔ Done.**
+
+* `message_generator()` now establishes an `agent.stream` span and emits child spans per SSE message/token via `_record_stream_message_span()` / `_record_stream_token_span()` for deep streaming visibility.
+
+#### 5. **Optimize `/health` Langfuse check**
+
+**✔ Done.**
+
+* Added `_get_cached_langfuse_health()` with a 30-second TTL cache so `/health` reuses recent Langfuse connectivity results before calling `auth_check()` again.
+
