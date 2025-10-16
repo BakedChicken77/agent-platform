@@ -91,3 +91,29 @@
 
 * Added `_get_cached_langfuse_health()` with a 30-second TTL cache so `/health` reuses recent Langfuse connectivity results before calling `auth_check()` again.
 
+### ✅ **Step 3 Checklist Review**
+
+#### 1. **Inject trace/session context into LangGraph agents**
+
+**✔ Done.**
+
+* `_handle_input()` now adds `agent_name`, `run_id`, and a consolidated `langfuse` payload into `RunnableConfig.configurable`, ensuring every graph receives `trace_id`, `session_id`, and identity metadata. Implemented in `src/service/service.py`.
+
+#### 2. **Decorate nodes with Langfuse spans**
+
+**✔ Done.**
+
+* Introduced `core.langgraph.instrument_langgraph_node()` to wrap LangGraph callables/runnables with Langfuse node spans, and applied it to chatbot, coding, supervisor, and background task nodes.
+
+#### 3. **Persist Langfuse IDs across checkpoints**
+
+**✔ Done.**
+
+* Added `persist_langfuse_state()` / `ensure_langfuse_state()` helpers that stash `trace_id`, `run_id`, and `session_id` inside graph state/checkpoints (`src/agents/chatbot.py`, `src/agents/coding_agent.py`, `src/agents/bg_task_agent/bg_task_agent.py`).
+
+#### 4. **Regression coverage for LangGraph helpers**
+
+**✔ Done.**
+
+* Added `tests/core/test_langgraph.py` verifying span instrumentation metadata and state persistence merging.
+

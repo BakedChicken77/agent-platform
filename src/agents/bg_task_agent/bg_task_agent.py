@@ -9,6 +9,7 @@ from langgraph.types import StreamWriter
 
 from agents.bg_task_agent.task import Task
 from core import get_model, settings
+from core.langgraph import ensure_langfuse_state, instrument_langgraph_node
 
 
 class AgentState(MessagesState, total=False):
@@ -26,16 +27,26 @@ def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessa
     return preprocessor | model  # type: ignore[return-value]
 
 
+@instrument_langgraph_node("bg_task.model")
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
+    ensure_langfuse_state(state, config=config)
     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
     model_runnable = wrap_model(m)
     response = await model_runnable.ainvoke(state, config)
 
     # We return a list, because this will get added to the existing list
-    return {"messages": [response]}
+    result: AgentState = {"messages": [response]}
+    ensure_langfuse_state(result, config=config, previous=state)
+    return result
 
 
-async def bg_task(state: AgentState, writer: StreamWriter) -> AgentState:
+@instrument_langgraph_node("bg_task.runner")
+async def bg_task(
+    state: AgentState,
+    writer: StreamWriter,
+    config: RunnableConfig | None = None,
+) -> AgentState:
+    ensure_langfuse_state(state, config=config)
     task1 = Task("Simple task 1...", writer)
     task2 = Task("Simple task 2...", writer)
 
@@ -48,7 +59,9 @@ async def bg_task(state: AgentState, writer: StreamWriter) -> AgentState:
     task2.finish(result="error", data={"output": 42})
     await asyncio.sleep(2)
     task1.finish(result="success", data={"output": 42})
-    return {"messages": []}
+    result: AgentState = {"messages": []}
+    ensure_langfuse_state(result, config=config, previous=state)
+    return result
 
 
 # Define the graph

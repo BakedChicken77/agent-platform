@@ -406,9 +406,24 @@ async def _handle_input(
         "model": user_input.model,
         "user_id": internal_user,
         "trace_id": telemetry.trace_id,
+        "agent_name": agent_id,
+        "run_id": str(run_id),
     }
     if telemetry.session_id:
         configurable["session_id"] = telemetry.session_id
+
+    configurable["langfuse"] = {
+        key: value
+        for key, value in {
+            "trace_id": telemetry.trace_id,
+            "session_id": telemetry.session_id,
+            "agent_name": agent_id,
+            "run_id": str(run_id),
+            "thread_id": thread_id,
+            "user_id": internal_user,
+        }.items()
+        if value is not None
+    }
 
     callbacks = telemetry.callback_handlers()
 
