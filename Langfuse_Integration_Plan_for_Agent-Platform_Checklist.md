@@ -117,3 +117,26 @@
 
 * Added `tests/core/test_langgraph.py` verifying span instrumentation metadata and state persistence merging.
 
+### ✅ **Step 4 Checklist Review**
+
+#### 1. **Instrument LangChain tools with Langfuse telemetry**
+
+**✔ Done.**
+
+* Added `core/tools.py` with `instrument_langfuse_tool()` to wrap tool `invoke`/`ainvoke`, start spans via `core.langgraph`, and emit tool events with input/output metrics.
+* Applied instrumentation across coding, file, Excel, and writing tool modules (`src/agents/coding_agent.py`, `src/agents/tools_files.py`, `src/agents/excel_tools.py`, `src/agents/tools_writing.py`, `src/agents/tools.py`, `src/tools/excel_tools.py`, `src/tools/generic_excel_tools.py`).
+* Extended `core/langgraph.py` with runtime span/event helpers reused by the tool decorator.
+
+#### 2. **Emit Langfuse events from background `Task` lifecycle**
+
+**✔ Done.**
+
+* Enhanced `Task` (`src/agents/bg_task_agent/task.py`) to accept Langfuse runtime context, capture payload previews, time executions, and emit `start`/`update`/`finish` events through `emit_runtime_event()`.
+
+#### 3. **Background workflow heartbeats**
+
+**✔ Done.**
+
+* Updated `src/agents/bg_task_agent/bg_task_agent.py` to derive runtime context via `build_langfuse_runtime`, feed it into `Task`, and emit heartbeat events (`queued`, `running`, `completed`) during the sample background flow.
+* Added regression coverage in `tests/core/test_tools.py` for tool instrumentation and task event emission behaviour.
+

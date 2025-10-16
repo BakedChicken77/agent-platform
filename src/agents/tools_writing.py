@@ -11,6 +11,8 @@ from langchain_experimental.utilities import PythonREPL
 from langchain_experimental.tools.python.tool import PythonREPLTool
 import math, numpy, matplotlib
 
+from core.tools import instrument_langfuse_tool
+
 # _TEMP_DIRECTORY = TemporaryDirectory()
 # WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
 WORKING_DIRECTORY = Path(r'.\pythonrepl_sandbox')
@@ -105,3 +107,10 @@ def python_repl_tool(
     except BaseException as e:
         return f"Failed to execute. Error: {repr(e)}"
     return f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
+
+
+create_outline = instrument_langfuse_tool(create_outline, name="create_outline")
+read_document = instrument_langfuse_tool(read_document, name="read_document")
+write_document = instrument_langfuse_tool(write_document, name="write_document")
+edit_document = instrument_langfuse_tool(edit_document, name="edit_document")
+python_repl_tool = instrument_langfuse_tool(python_repl_tool, name="python_repl_tool")

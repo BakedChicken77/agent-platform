@@ -27,6 +27,7 @@ from typing_extensions import TypedDict, Annotated
 
 from core import get_model, settings
 from core.langgraph import ensure_langfuse_state, instrument_langgraph_node
+from core.tools import instrument_langfuse_tool
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langgraph.graph.message import add_messages
 
@@ -155,6 +156,9 @@ async def python_repl(
         return repl.run(code)
     except Exception as e:
         return f"Execution failed: {e}"
+
+
+python_repl = instrument_langfuse_tool(python_repl, name="python_repl")
 
 
 prompt_coding_agent = """\

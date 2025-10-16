@@ -15,6 +15,8 @@ except Exception:
 
 from langchain_core.tools import tool
 
+from core.tools import instrument_langfuse_tool
+
 # =========================
 # Helpers & Data IO
 # =========================
@@ -522,6 +524,15 @@ def EXCEL_ToCSVBytes(payload_json: str) -> str:
         return json.dumps({"base64": base64.b64encode(buf.getvalue()).decode("ascii")}, ensure_ascii=False)
     except Exception as e:
         return _err(f"ToCSVBytes failed: {e}")
+
+# Instrument Langfuse telemetry for each exported tool
+EXCEL_FindHeaders = instrument_langfuse_tool(EXCEL_FindHeaders, name="EXCEL_FindHeaders")
+EXCEL_Read = instrument_langfuse_tool(EXCEL_Read, name="EXCEL_Read")
+EXCEL_MapSchema = instrument_langfuse_tool(EXCEL_MapSchema, name="EXCEL_MapSchema")
+EXCEL_Validate = instrument_langfuse_tool(EXCEL_Validate, name="EXCEL_Validate")
+EXCEL_Write = instrument_langfuse_tool(EXCEL_Write, name="EXCEL_Write")
+EXCEL_ToMarkdown = instrument_langfuse_tool(EXCEL_ToMarkdown, name="EXCEL_ToMarkdown")
+EXCEL_ToCSVBytes = instrument_langfuse_tool(EXCEL_ToCSVBytes, name="EXCEL_ToCSVBytes")
 
 # Export convenient list for ToolNode([...])
 tools = [
