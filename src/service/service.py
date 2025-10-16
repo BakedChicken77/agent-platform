@@ -1,28 +1,34 @@
 ## src/service/service.py
 
-import os
 import inspect
 import json
 import logging
+import os
 import warnings
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, status, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langfuse import Langfuse  # type: ignore[import-untyped]
 from langfuse.callback import CallbackHandler  # type: ignore[import-untyped]
-from langgraph.types import Command, Interrupt
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info
-from core import settings, get_settings, Settings, LoggingMiddleware
+from auth.middleware import AuthMiddleware
+from core import LoggingMiddleware, Settings, get_settings
+from core.langfuse import (
+    RequestSpanContext,
+    cached_auth_check,
+    get_langfuse_client,
+    request_span,
+)
+from langgraph.types import Command, Interrupt
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -34,18 +40,14 @@ from schema import (
     StreamInput,
     UserInput,
 )
+from service import catalog_postgres
+from service.files_router import router as files_router
+from service.storage import ensure_upload_root
 from service.utils import (
     convert_message_content_to_string,
     langchain_to_chat_message,
     remove_tool_calls,
 )
-
-from service.auth import verify_jwt
-from auth.middleware import AuthMiddleware
-
-from service.files_router import router as files_router
-from service.storage import ensure_upload_root
-from service import catalog_postgres
 
 warnings.filterwarnings("ignore", category=LangChainBetaWarning)
 logger = logging.getLogger(__name__)
@@ -133,6 +135,14 @@ def _get_user_id_from_claims(claims: dict) -> str:
 # -------------------------------------------------------------------------------
 
 
+def _attach_callback_handler(config: RunnableConfig, handler: CallbackHandler) -> None:
+    """Append a LangChain callback handler to the runnable config."""
+
+    callbacks = list(config.callbacks or [])
+    callbacks.append(handler)
+    config.callbacks = callbacks
+
+
 async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) -> tuple[dict[str, Any], UUID]:
     """
     Parse user input and handle any required interrupt resumption.
@@ -153,10 +163,6 @@ async def _handle_input(user_input: UserInput, agent: AgentGraph, claims: dict) 
     }
 
     callbacks = []
-    if settings.LANGFUSE_TRACING:
-        # Initialize Langfuse CallbackHandler for Langchain (tracing)
-        langfuse_handler = CallbackHandler()
-        callbacks.append(langfuse_handler)
 
     if user_input.agent_config:
         if overlap := configurable.keys() & user_input.agent_config.keys():
@@ -202,30 +208,63 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
     Identity is derived from JWT claims (request.state.user). Any client-sent user_id is ignored.
     """
     agent: AgentGraph = get_agent(agent_id)
-    kwargs, run_id = await _handle_input(user_input, agent, getattr(request.state, "user", {}) or {})
+    kwargs, run_id = await _handle_input(
+        user_input, agent, getattr(request.state, "user", {}) or {}
+    )
+    config = kwargs["config"]
+    thread_id = str(config.configurable.get("thread_id"))
+    user_id = config.configurable.get("user_id")
 
-    try:
-        response_events: list[tuple[str, Any]] = await agent.ainvoke(
-            **kwargs, stream_mode=["updates", "values"]
-        )  # type: ignore # fmt: skip
-        response_type, response = response_events[-1]
-        if response_type == "values":
-            # Normal response, the agent completed successfully
-            output = langchain_to_chat_message(response["messages"][-1])
-        elif response_type == "updates" and "__interrupt__" in response:
-            # The last thing to occur was an interrupt
-            # Return the value of the first interrupt as an AIMessage
-            output = langchain_to_chat_message(
-                AIMessage(content=response["__interrupt__"][0].value)
+    context_manager = (
+        request_span(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            run_id=run_id,
+            input_payload=user_input.model_dump(),
+        )
+        if settings.LANGFUSE_TRACING
+        else nullcontext(None)
+    )
+
+    with context_manager as span_context:
+        if isinstance(span_context, RequestSpanContext):
+            _attach_callback_handler(config, span_context.handler)
+            span_context.event(
+                "invoke.start",
+                metadata={"agent_id": agent_id, "thread_id": thread_id},
             )
-        else:
-            raise ValueError(f"Unexpected response type: {response_type}")
 
-        output.run_id = str(run_id)
-        return output
-    except Exception as e:
-        logger.error(f"An exception occurred: {e}")
-        raise HTTPException(status_code=500, detail="Unexpected error")
+        try:
+            response_events: list[tuple[str, Any]] = await agent.ainvoke(
+                **kwargs, stream_mode=["updates", "values"]
+            )  # type: ignore # fmt: skip
+            response_type, response = response_events[-1]
+            if response_type == "values":
+                # Normal response, the agent completed successfully
+                output = langchain_to_chat_message(response["messages"][-1])
+            elif response_type == "updates" and "__interrupt__" in response:
+                # The last thing to occur was an interrupt
+                # Return the value of the first interrupt as an AIMessage
+                output = langchain_to_chat_message(
+                    AIMessage(content=response["__interrupt__"][0].value)
+                )
+            else:
+                raise ValueError(f"Unexpected response type: {response_type}")
+
+            output.run_id = str(run_id)
+            if isinstance(span_context, RequestSpanContext):
+                span_context.set_output(output.model_dump())
+                span_context.event(
+                    "invoke.complete",
+                    metadata={"response_type": response_type},
+                )
+            return output
+        except Exception as e:
+            if isinstance(span_context, RequestSpanContext):
+                span_context.record_exception(e)
+            logger.error(f"An exception occurred: {e}")
+            raise HTTPException(status_code=500, detail="Unexpected error")
 
 
 async def message_generator(
@@ -238,114 +277,219 @@ async def message_generator(
     """
     agent: AgentGraph = get_agent(agent_id)
     kwargs, run_id = await _handle_input(user_input, agent, claims)
+    config = kwargs["config"]
+    thread_id = str(config.configurable.get("thread_id"))
+    user_id = config.configurable.get("user_id")
 
-    try:
-        # Process streamed events from the graph and yield messages over the SSE stream.
-        async for stream_event in agent.astream(
-            **kwargs, stream_mode=["updates", "messages", "custom"], subgraphs=True
-        ):
-            if not isinstance(stream_event, tuple):
-                continue
-            # Handle different stream event structures based on subgraphs
-            if len(stream_event) == 3:
-                # With subgraphs=True: (node_path, stream_mode, event)
-                _, stream_mode, event = stream_event
-            else:
-                # Without subgraphs: (stream_mode, event)
-                stream_mode, event = stream_event
-            new_messages = []
-            if stream_mode == "updates":
-                for node, updates in event.items():
-                    # A simple approach to handle agent interrupts.
-                    if node == "__interrupt__":
-                        interrupt: Interrupt
-                        for interrupt in updates:
-                            new_messages.append(AIMessage(content=interrupt.value))
-                        continue
-                    updates = updates or {}
-                    update_messages = updates.get("messages", [])
-                    # special cases for using langgraph-supervisor library
-                    if node == "supervisor":
-                        # Get only the last ToolMessage since it is added by the
-                        # langgraph lib and not actual AI output so it won't be an
-                        # independent event
-                        if isinstance(update_messages[-1], ToolMessage):
-                            update_messages = [update_messages[-1]]
-                        else:
-                            update_messages = []
+    context_manager = (
+        request_span(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            run_id=run_id,
+            input_payload=user_input.model_dump(),
+        )
+        if settings.LANGFUSE_TRACING
+        else nullcontext(None)
+    )
 
-                    if node in ("research_expert", "math_expert", "team_supervisor"):
-                        update_messages = []
-                    new_messages.extend(update_messages)
+    token_index = 0
+    last_response: ChatMessage | None = None
+    error_sent = False
+    exception_recorded = False
 
-            if stream_mode == "custom":
-                new_messages = [event]
+    with context_manager as span_context:
+        if isinstance(span_context, RequestSpanContext):
+            _attach_callback_handler(config, span_context.handler)
+            span_context.event(
+                "stream.start",
+                metadata={
+                    "agent_id": agent_id,
+                    "thread_id": thread_id,
+                    "stream_tokens": bool(user_input.stream_tokens),
+                },
+                input=user_input.model_dump(),
+            )
 
-            # LangGraph streaming may emit tuples: (field_name, field_value)
-            # e.g. ('content', <str>), ('tool_calls', [ToolCall,...]), ('additional_kwargs', {...}), etc.
-            # We accumulate only supported fields into `parts` and skip unsupported metadata.
-            # More info at: https://langchain-ai.github.io/langgraph/cloud/how-tos/stream_messages/
-            processed_messages = []
-            current_message: dict[str, Any] = {}
-            for message in new_messages:
-                if isinstance(message, tuple):
-                    key, value = message
-                    # Store parts in temporary dict
-                    current_message[key] = value
+        try:
+            # Process streamed events from the graph and yield messages over the SSE stream.
+            async for stream_event in agent.astream(
+                **kwargs, stream_mode=["updates", "messages", "custom"], subgraphs=True
+            ):
+                if not isinstance(stream_event, tuple):
+                    continue
+                # Handle different stream event structures based on subgraphs
+                if len(stream_event) == 3:
+                    # With subgraphs=True: (node_path, stream_mode, event)
+                    _, stream_mode, event = stream_event
                 else:
-                    # Add complete message if we have one in progress
-                    if current_message:
-                        processed_messages.append(_create_ai_message(current_message))
-                        current_message = {}
-                    processed_messages.append(message)
+                    # Without subgraphs: (stream_mode, event)
+                    stream_mode, event = stream_event
 
-            # Add any remaining message parts
-            if current_message:
-                processed_messages.append(_create_ai_message(current_message))
+                if isinstance(span_context, RequestSpanContext):
+                    span_context.event(
+                        "stream.phase", metadata={"mode": stream_mode}
+                    )
 
-            for message in processed_messages:
-                try:
-                    chat_message = langchain_to_chat_message(message)
-                    chat_message.run_id = str(run_id)
-                except Exception as e:
-                    logger.error(f"Error parsing message: {e}")
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
-                    continue
-                # LangGraph re-sends the input message; drop it
-                if isinstance(user_input, StreamInput) and chat_message.type == "human" and chat_message.content == user_input.message:
-                    continue
-                yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+                new_messages = []
+                if stream_mode == "updates":
+                    for node, updates in event.items():
+                        # A simple approach to handle agent interrupts.
+                        if node == "__interrupt__":
+                            interrupt: Interrupt
+                            for interrupt in updates:
+                                new_messages.append(AIMessage(content=interrupt.value))
+                            continue
+                        updates = updates or {}
+                        update_messages = updates.get("messages", [])
+                        # special cases for using langgraph-supervisor library
+                        if node == "supervisor":
+                            # Get only the last ToolMessage since it is added by the
+                            # langgraph lib and not actual AI output so it won't be an
+                            # independent event
+                            if update_messages and isinstance(update_messages[-1], ToolMessage):
+                                update_messages = [update_messages[-1]]
+                            else:
+                                update_messages = []
 
-            if stream_mode == "messages":
-                if not user_input.stream_tokens:
-                    continue
-                msg, metadata = event
-                if "skip_stream" in metadata.get("tags", []):
-                    continue
-                # Drop non-LLM nodes
-                if not isinstance(msg, AIMessageChunk):
-                    continue
-                content = remove_tool_calls(msg.content)
-                if content:
+                        if node in ("research_expert", "math_expert", "team_supervisor"):
+                            update_messages = []
+                        new_messages.extend(update_messages)
+                        if isinstance(span_context, RequestSpanContext):
+                            span_context.event(
+                                "stream.update",
+                                metadata={
+                                    "node": node,
+                                    "message_count": len(update_messages),
+                                },
+                            )
+
+                if stream_mode == "custom":
+                    new_messages = [event]
+                    if isinstance(span_context, RequestSpanContext):
+                        span_context.event(
+                            "stream.custom",
+                            metadata={
+                                "event_type": getattr(event, "type", type(event).__name__),
+                            },
+                            input=event,
+                        )
+
+                # LangGraph streaming may emit tuples: (field_name, field_value)
+                # e.g. ('content', <str>), ('tool_calls', [ToolCall,...]), ('additional_kwargs', {...}), etc.
+                # We accumulate only supported fields into `parts` and skip unsupported metadata.
+                # More info at: https://langchain-ai.github.io/langgraph/cloud/how-tos/stream_messages/
+                processed_messages = []
+                current_message: dict[str, Any] = {}
+                for message in new_messages:
+                    if isinstance(message, tuple):
+                        key, value = message
+                        # Store parts in temporary dict
+                        current_message[key] = value
+                    else:
+                        # Add complete message if we have one in progress
+                        if current_message:
+                            processed_messages.append(_create_ai_message(current_message))
+                            current_message = {}
+                        processed_messages.append(message)
+
+                # Add any remaining message parts
+                if current_message:
+                    processed_messages.append(_create_ai_message(current_message))
+
+                for message in processed_messages:
+                    try:
+                        chat_message = langchain_to_chat_message(message)
+                        chat_message.run_id = str(run_id)
+                    except Exception as e:
+                        if isinstance(span_context, RequestSpanContext):
+                            span_context.record_exception(e)
+                        exception_recorded = True
+                        logger.error(f"Error parsing message: {e}")
+                        error_payload = json.dumps({"type": "error", "content": "Unexpected error"})
+                        yield f"data: {error_payload}\n\n"
+                        error_sent = True
+                        raise
+                    # LangGraph re-sends the input message; drop it
+                    if (
+                        isinstance(user_input, StreamInput)
+                        and chat_message.type == "human"
+                        and chat_message.content == user_input.message
+                    ):
+                        continue
+                    if isinstance(span_context, RequestSpanContext) and chat_message.type == "ai":
+                        last_response = chat_message
+                        span_context.event(
+                            "stream.message",
+                            metadata={"message_type": chat_message.type},
+                            output=chat_message.model_dump(),
+                        )
+                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+
+                if stream_mode == "messages":
+                    if not user_input.stream_tokens:
+                        continue
+                    msg, metadata = event
+                    if "skip_stream" in metadata.get("tags", []):
+                        continue
+                    # Drop non-LLM nodes
+                    if not isinstance(msg, AIMessageChunk):
+                        continue
+                    content = remove_tool_calls(msg.content)
+                    if not content:
+                        continue
                     text = convert_message_content_to_string(content)
 
-                    # Detect plot payload markers and emit as custom SSE
                     if text.startswith("PLOTLY_JSON:"):
                         payload = text[len("PLOTLY_JSON:"):]
+                        if isinstance(span_context, RequestSpanContext):
+                            span_context.event(
+                                "stream.event",
+                                metadata={"event": "plotly"},
+                                input=payload,
+                            )
                         yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
                         continue
                     if text.startswith("DATA_URI:"):
                         payload = text[len("DATA_URI:"):]
+                        if isinstance(span_context, RequestSpanContext):
+                            span_context.event(
+                                "stream.event",
+                                metadata={"event": "image"},
+                                input=payload,
+                            )
                         yield f"data: {json.dumps({'type':'event', 'event':'image', 'content': payload})}\n\n"
                         continue
 
+                    if isinstance(span_context, RequestSpanContext):
+                        span_context.event(
+                            "stream.token",
+                            metadata={"index": token_index},
+                            input=text,
+                        )
+                    token_index += 1
+
                     # default token streaming
                     yield f"data: {json.dumps({'type':'token', 'content': text})}\n\n"
-    except Exception as e:
-        logger.error(f"Error in message generator: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
-    finally:
-        yield "data: [DONE]\n\n"
+        except Exception as e:
+            if isinstance(span_context, RequestSpanContext) and not exception_recorded:
+                span_context.record_exception(e)
+            logger.error(f"Error in message generator: {e}")
+            if not error_sent:
+                yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
+            raise
+        else:
+            if isinstance(span_context, RequestSpanContext):
+                if last_response is not None:
+                    span_context.set_output(last_response.model_dump())
+                span_context.event(
+                    "stream.complete",
+                    metadata={"token_count": token_index},
+                )
+            yield "data: [DONE]\n\n"
+
+
+
 
 
 def _create_ai_message(parts: dict) -> AIMessage:
@@ -432,12 +576,17 @@ async def health_check():
     health_status = {"status": "ok"}
 
     if settings.LANGFUSE_TRACING:
-        try:
-            langfuse = Langfuse()
-            health_status["langfuse"] = "connected" if langfuse.auth_check() else "disconnected"
-        except Exception as e:
-            logger.error(f"Langfuse connection error: {e}")
-            health_status["langfuse"] = "disconnected"
+        client = get_langfuse_client()
+        if client is None:
+            health_status["langfuse"] = "disabled"
+        else:
+            try:
+                health_status["langfuse"] = (
+                    "connected" if cached_auth_check() else "disconnected"
+                )
+            except Exception as e:  # pragma: no cover - defensive logging
+                logger.error(f"Langfuse connection error: {e}")
+                health_status["langfuse"] = "disconnected"
 
     return health_status
 
