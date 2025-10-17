@@ -140,3 +140,37 @@
 * Updated `src/agents/bg_task_agent/bg_task_agent.py` to derive runtime context via `build_langfuse_runtime`, feed it into `Task`, and emit heartbeat events (`queued`, `running`, `completed`) during the sample background flow.
 * Added regression coverage in `tests/core/test_tools.py` for tool instrumentation and task event emission behaviour.
 
+### ✅ **Step 5 Checklist Review**
+
+#### 1. **Extend `AgentClient` with Langfuse trace/session support**
+
+**✔ Done.**
+
+* Added `_prepare_agent_config()` helper so `invoke`/`ainvoke`/`stream`/`astream` accept `trace_id` & `session_id` kwargs and inject them into the payload (`src/client/client.py`).
+* Expanded client docstrings and added regression assertions in `tests/client/test_client.py` verifying the forwarded identifiers.
+
+#### 2. **Persist trace context in Streamlit**
+
+**✔ Done.**
+
+* Established `TRACE_ID_QUERY_PARAM` + `st.session_state.trace_id` lifecycle, generating a UUID when absent and syncing to query params for shareable URLs (`src/streamlit_app.py`).
+* Added `update_langfuse_runtime()` to consolidate runtime metadata and ensure every request passes `trace_id`/`session_id` to the API client.
+
+#### 3. **Surface Langfuse trace link in UI**
+
+**✔ Done.**
+
+* Introduced `core.langfuse.build_trace_url()` and reused it from `render_trace_link()` so the chat footer shows a "🔗 View in Langfuse" link bound to the active trace (`src/core/langfuse.py`, `src/streamlit_app.py`).
+
+#### 4. **Feedback & frontend telemetry wiring**
+
+**✔ Done.**
+
+* Feedback submissions now call `AgentClient.acreate_feedback()` with UI metadata while the client handles Langfuse identifiers (`src/streamlit_app.py`, `src/client/client.py`).
+* Added lightweight event emitters for page load and file uploads that invoke the Langfuse client directly when tracing is enabled (`src/streamlit_app.py`).
+
+* **✔ Done.** `AgentClient.acreate_feedback` accepts `trace_id`/`session_id`; injects IDs into payload and metadata; tests added.
+  * Implemented payload construction and metadata mirroring in `src/client/client.py` with regression coverage in `tests/client/test_client.py`.
+* **✔ Done.** Frontend event emission decoupled from `core.langgraph`; uses Langfuse client directly with graceful no-op fallback.
+  * Introduced a Streamlit helper that resolves the Langfuse client and no-ops when tracing is disabled (`src/streamlit_app.py`).
+
