@@ -6,7 +6,7 @@ import logging
 import os
 import time
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any
@@ -194,12 +194,22 @@ def _configure_langfuse_handler(handler: Any, telemetry: LangfuseTelemetry) -> N
 
 
 def _prepare_langfuse_context(
-    agent_id: str, run_id: UUID, thread_id: str, user_id: str
+    agent_id: str,
+    run_id: UUID,
+    thread_id: str,
+    user_id: str,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    metadata_overrides: Mapping[str, Any] | None = None,
 ) -> LangfuseTelemetry:
-    metadata = {"agent_id": agent_id, "thread_id": thread_id, "user_id": user_id}
+    metadata: dict[str, Any] = {"agent_id": agent_id, "thread_id": thread_id, "user_id": user_id}
+    if metadata_overrides:
+        metadata.update({k: v for k, v in metadata_overrides.items() if v is not None})
+
     telemetry = LangfuseTelemetry(
-        trace_id=str(run_id),
-        session_id=thread_id,
+        trace_id=str(trace_id or run_id),
+        session_id=(session_id or thread_id) or None,
         user_id=user_id,
         metadata=metadata,
     )
@@ -212,13 +222,15 @@ def _prepare_langfuse_context(
         return telemetry
 
     try:
-        telemetry.trace = client.trace(
-            name=f"agent.{agent_id}.trace",
-            trace_id=telemetry.trace_id,
-            session_id=thread_id,
-            user_id=user_id,
-            metadata=metadata,
-        )
+        trace_kwargs = {
+            "name": f"agent.{agent_id}.trace",
+            "trace_id": telemetry.trace_id,
+            "user_id": user_id,
+            "metadata": metadata,
+        }
+        if telemetry.session_id:
+            trace_kwargs["session_id"] = telemetry.session_id
+        telemetry.trace = client.trace(**trace_kwargs)
     except Exception as exc:  # pragma: no cover - network interaction
         logger.debug("Failed to create Langfuse trace: %s", exc)
     else:
@@ -399,7 +411,41 @@ async def _handle_input(
     # Canonical identity from JWT (no tenant prefix)
     internal_user = _get_user_id_from_claims(claims or {})
 
-    telemetry = _prepare_langfuse_context(agent_id, run_id, thread_id, internal_user)
+    agent_config = dict(user_input.agent_config or {})
+    langfuse_overrides = agent_config.pop("langfuse", None)
+    if langfuse_overrides is not None and not isinstance(langfuse_overrides, Mapping):
+        raise HTTPException(
+            status_code=422,
+            detail="agent_config.langfuse must be a mapping when provided",
+        )
+
+    trace_override = None
+    session_override = None
+    extra_metadata: dict[str, Any] | None = None
+    if isinstance(langfuse_overrides, Mapping):
+        trace_value = langfuse_overrides.get("trace_id")
+        if trace_value:
+            trace_override = str(trace_value)
+        session_value = langfuse_overrides.get("session_id")
+        if session_value:
+            session_override = str(session_value)
+        extra_items = {
+            key: value
+            for key, value in langfuse_overrides.items()
+            if key not in {"trace_id", "session_id"}
+        }
+        if extra_items:
+            extra_metadata = dict(extra_items)
+
+    telemetry = _prepare_langfuse_context(
+        agent_id,
+        run_id,
+        thread_id,
+        internal_user,
+        trace_id=trace_override,
+        session_id=session_override,
+        metadata_overrides=extra_metadata,
+    )
 
     configurable = {
         "thread_id": thread_id,
@@ -427,13 +473,18 @@ async def _handle_input(
 
     callbacks = telemetry.callback_handlers()
 
-    if user_input.agent_config:
-        if overlap := configurable.keys() & user_input.agent_config.keys():
+    if agent_config:
+        if overlap := configurable.keys() & agent_config.keys():
             raise HTTPException(
                 status_code=422,
                 detail=f"agent_config contains reserved keys: {overlap}",
             )
-        configurable.update(user_input.agent_config)
+        configurable.update(agent_config)
+
+    if extra_metadata:
+        configurable["langfuse"].update(
+            {k: v for k, v in extra_metadata.items() if v is not None}
+        )
 
     config = RunnableConfig(
         configurable=configurable,

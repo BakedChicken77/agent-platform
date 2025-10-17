@@ -13,6 +13,7 @@ import logging
 from contextlib import AbstractContextManager, nullcontext
 from functools import lru_cache
 from typing import Any
+from urllib.parse import quote_plus
 
 from core.settings import Settings, get_settings
 
@@ -103,3 +104,26 @@ def create_span(**kwargs: Any) -> AbstractContextManager[Any]:
     if client is None:
         return nullcontext()
     return client.span(**kwargs)
+
+
+def build_trace_url(trace_id: str | None) -> str | None:
+    """Return a Langfuse trace URL for ``trace_id`` when possible."""
+
+    if not trace_id:
+        return None
+
+    settings: Settings = get_settings()
+    if not settings.LANGFUSE_TRACING:
+        return None
+
+    public_key = settings.LANGFUSE_CLIENT_PUBLIC_KEY
+    if not public_key:
+        return None
+
+    host = settings.LANGFUSE_HOST.rstrip("/")
+    url = f"{host}/project/{public_key}/trace/{trace_id}"
+
+    if settings.LANGFUSE_ENVIRONMENT:
+        url = f"{url}?env={quote_plus(settings.LANGFUSE_ENVIRONMENT)}"
+
+    return url

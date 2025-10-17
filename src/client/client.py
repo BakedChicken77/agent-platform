@@ -3,7 +3,7 @@
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any, IO
+from typing import IO, Any
 
 import httpx
 
@@ -70,6 +70,29 @@ class AgentClient:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
 
+    def _prepare_agent_config(
+        self,
+        agent_config: dict[str, Any] | None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Merge Langfuse identifiers into ``agent_config`` when provided."""
+
+        extras = {
+            key: value
+            for key, value in {"trace_id": trace_id, "session_id": session_id}.items()
+            if value
+        }
+        if not extras:
+            return agent_config
+
+        config = dict(agent_config or {})
+        langfuse_config = dict(config.get("langfuse", {}))
+        langfuse_config.update(extras)
+        config["langfuse"] = langfuse_config
+        return config
+
     def retrieve_info(self) -> None:
         try:
             response = httpx.get(
@@ -102,6 +125,9 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent asynchronously. Only the final message is returned.
@@ -112,6 +138,8 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             AnyMessage: The response from the agent
@@ -123,6 +151,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         async with httpx.AsyncClient() as client:
@@ -145,6 +176,9 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent synchronously. Only the final message is returned.
@@ -155,6 +189,8 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             ChatMessage: The response from the agent
@@ -166,6 +202,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         try:
@@ -213,6 +252,9 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Generator[ChatMessage | str, None, None]:
         """
         Stream the agent's response synchronously.
@@ -229,6 +271,8 @@ class AgentClient:
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             Generator[ChatMessage | str, None, None]: The response from the agent
@@ -240,6 +284,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         try:
@@ -267,6 +314,9 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncGenerator[ChatMessage | str, None]:
         """
         Stream the agent's response asynchronously.
@@ -284,6 +334,8 @@ class AgentClient:
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             AsyncGenerator[ChatMessage | str, None]: The response from the agent
@@ -295,6 +347,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         async with httpx.AsyncClient() as client:
@@ -317,7 +372,14 @@ class AgentClient:
                 raise AgentClientError(f"Error: {e}")
 
     async def acreate_feedback(
-        self, run_id: str, key: str, score: float, kwargs: dict[str, Any] = {}
+        self,
+        run_id: str,
+        key: str,
+        score: float,
+        kwargs: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """
         Create a feedback record for a run.
@@ -326,12 +388,31 @@ class AgentClient:
         credentials can be stored and managed in the service rather than the client.
         See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
         """
-        request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
+        payload_kwargs: dict[str, Any] = dict(kwargs or {})
+        metadata: dict[str, Any] | None = None
+        if payload_kwargs.get("metadata") is not None:
+            metadata = dict(payload_kwargs["metadata"])
+        elif trace_id or session_id:
+            metadata = {}
+
+        if metadata is not None:
+            if trace_id:
+                metadata["langfuse_trace_id"] = trace_id
+            if session_id:
+                metadata["langfuse_session_id"] = session_id
+            payload_kwargs["metadata"] = metadata
+
+        request = Feedback(run_id=run_id, key=key, score=score, kwargs=payload_kwargs)
+        payload = request.model_dump()
+        if trace_id:
+            payload["trace_id"] = trace_id
+        if session_id:
+            payload["session_id"] = session_id
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     f"{self.base_url}/feedback",
-                    json=request.model_dump(),
+                    json=payload,
                     headers=self._headers,
                     timeout=self.timeout,
                 )
