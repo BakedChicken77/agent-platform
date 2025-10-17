@@ -761,7 +761,43 @@ async def feedback(feedback: Feedback) -> FeedbackResponse:
         score=feedback.score,
         **kwargs,
     )
-    return FeedbackResponse()
+
+    langfuse_trace_id = feedback.trace_id or kwargs.get("metadata", {}).get("langfuse_trace_id")
+    langfuse_run_id = (
+        feedback.langfuse_run_id
+        or kwargs.get("metadata", {}).get("langfuse_run_id")
+        or feedback.run_id
+    )
+
+    client_langfuse = get_langfuse_client()
+    if client_langfuse is not None:
+        comment = kwargs.get("comment")
+        metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else None
+        score_payload: dict[str, Any] = {
+            "name": feedback.key,
+            "value": feedback.score,
+            "data_type": "NUMERIC",
+        }
+        if comment:
+            score_payload["comment"] = comment
+        if metadata:
+            score_payload["metadata"] = metadata
+        try:
+            create_score = getattr(client_langfuse, "create_score", None)
+            score_current_trace = getattr(client_langfuse, "score_current_trace", None)
+            if langfuse_trace_id and callable(create_score):
+                create_score(trace_id=langfuse_trace_id, **score_payload)
+            elif langfuse_run_id and callable(create_score):
+                create_score(run_id=langfuse_run_id, **score_payload)
+            elif callable(score_current_trace):
+                score_current_trace(**score_payload)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Langfuse feedback scoring failed: %s", exc)
+
+    return FeedbackResponse(
+        langfuse_trace_id=langfuse_trace_id,
+        langfuse_run_id=langfuse_run_id,
+    )
 
 
 @router.post("/history")

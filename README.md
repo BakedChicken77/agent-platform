@@ -109,6 +109,33 @@ To capture traces and metrics with [Langfuse](https://langfuse.com/):
 3. Restart the FastAPI service (and Streamlit app if running) so the new configuration is applied. The Docker and local runners automatically forward the `LANGFUSE_*` environment variables to the containers.
 4. Visit the `/health` endpoint to confirm Langfuse connectivity or inspect traces in the Langfuse dashboard after invoking an agent.
 
+#### Langfuse-aware API usage
+
+* The Feedback API returns a `FeedbackResponse` payload that surfaces `langfuse_trace_id` and `langfuse_run_id` so clients can link UI state with the recorded trace.
+* File endpoints accept optional `X-Langfuse-Trace-Id`, `X-Langfuse-Session-Id`, and `X-Langfuse-Run-Id` headers. These values are ingested into the runtime context alongside any query parameters, allowing uploads to be stitched to the active trace.
+
+```bash
+curl -X POST "http://localhost:8080/files/upload?thread_id=thread-123" \
+  -H "X-Langfuse-Trace-Id: trace-abc" \
+  -H "X-Langfuse-Session-Id: session-def" \
+  -H "X-Langfuse-Run-Id: run-ghi" \
+  -F "files=@/path/to/document.txt"
+```
+
+```bash
+curl -X POST "http://localhost:8080/feedback" \
+  -H "Content-Type: application/json" \
+  -H "X-Langfuse-Trace-Id: trace-abc" \
+  -d '{
+        "run_id": "run-ghi",
+        "key": "human-feedback-stars",
+        "score": 0.9,
+        "trace_id": "trace-abc",
+        "session_id": "session-def",
+        "langfuse_run_id": "run-ghi"
+      }'
+```
+
 ### Building or customizing your own agent
 
 To customize the agent for your own use case:
