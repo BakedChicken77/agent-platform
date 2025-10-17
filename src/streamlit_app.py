@@ -488,7 +488,15 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                         for f in up_files:
                             payload.append((f.name, f.getvalue(), f.type))
                         try:
-                            resp = agent_client.upload_files(payload, thread_id=st.session_state.thread_id)
+                            resp = agent_client.upload_files(
+                                payload,
+                                thread_id=st.session_state.thread_id,
+                                trace_id=st.session_state.get("trace_id")
+                                or st.session_state.get("langfuse_trace_id"),
+                                session_id=st.session_state.get("thread_id")
+                                or st.session_state.get("langfuse_session_id"),
+                                langfuse_run_id=st.session_state.get("langfuse_run_id"),
+                            )
                             emit_frontend_event(
                                 "frontend.file_upload",
                                 {
@@ -794,7 +802,7 @@ async def handle_feedback() -> None:
         agent_client: AgentClient = st.session_state.agent_client
         try:
             feedback_kwargs = {"comment": "In-line human feedback"}
-            await agent_client.acreate_feedback(
+            response = await agent_client.acreate_feedback(
                 run_id=latest_run_id,
                 key="human-feedback-stars",
                 score=normalized_score,
@@ -803,7 +811,12 @@ async def handle_feedback() -> None:
                 or st.session_state.get("langfuse_trace_id"),
                 session_id=st.session_state.get("thread_id")
                 or st.session_state.get("langfuse_session_id"),
+                langfuse_run_id=st.session_state.get("langfuse_run_id"),
             )
+            if response.langfuse_trace_id:
+                st.session_state["langfuse_trace_id"] = response.langfuse_trace_id
+            if response.langfuse_run_id:
+                st.session_state["langfuse_run_id"] = response.langfuse_run_id
         except AgentClientError as e:
             st.error(f"Error recording feedback: {e}")
             st.stop()

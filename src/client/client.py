@@ -12,6 +12,7 @@ from schema import (
     ChatHistoryInput,
     ChatMessage,
     Feedback,
+    FeedbackResponse,
     ServiceMetadata,
     StreamInput,
     UserInput,
@@ -68,6 +69,23 @@ class AgentClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         elif self.auth_secret:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
+        return headers
+
+    def _with_langfuse_headers(
+        self,
+        *,
+        base: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, str]:
+        headers = dict(base or self._headers)
+        if trace_id:
+            headers["X-Langfuse-Trace-Id"] = trace_id
+        if session_id:
+            headers["X-Langfuse-Session-Id"] = session_id
+        if run_id:
+            headers["X-Langfuse-Run-Id"] = run_id
         return headers
 
     def _prepare_agent_config(
@@ -380,7 +398,8 @@ class AgentClient:
         *,
         trace_id: str | None = None,
         session_id: str | None = None,
-    ) -> None:
+        langfuse_run_id: str | None = None,
+    ) -> FeedbackResponse:
         """
         Create a feedback record for a run.
 
@@ -402,22 +421,31 @@ class AgentClient:
                 metadata["langfuse_session_id"] = session_id
             payload_kwargs["metadata"] = metadata
 
-        request = Feedback(run_id=run_id, key=key, score=score, kwargs=payload_kwargs)
-        payload = request.model_dump()
-        if trace_id:
-            payload["trace_id"] = trace_id
-        if session_id:
-            payload["session_id"] = session_id
+        request = Feedback(
+            run_id=run_id,
+            key=key,
+            score=score,
+            kwargs=payload_kwargs,
+            trace_id=trace_id,
+            session_id=session_id,
+            langfuse_run_id=langfuse_run_id,
+        )
+        payload = request.model_dump(exclude_none=True)
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     f"{self.base_url}/feedback",
                     json=payload,
-                    headers=self._headers,
+                    headers=headers,
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                response.json()
+                return FeedbackResponse.model_validate(response.json())
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")
 
@@ -443,40 +471,119 @@ class AgentClient:
         return ChatHistory.model_validate(response.json())
 
     # ---------- Files API ----------
-    def list_files(self, thread_id: str | None = None) -> dict:
+    def list_files(
+        self,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> dict:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
-            r = httpx.get(f"{self.base_url}/files", params=params, headers=self._headers, timeout=self.timeout)
+            r = httpx.get(
+                f"{self.base_url}/files",
+                params=params,
+                headers=headers,
+                timeout=self.timeout,
+            )
             r.raise_for_status()
             return r.json()
         except httpx.HTTPError as e:
             raise AgentClientError(f"List files failed: {e}")
 
-    def download_file(self, file_id: str, thread_id: str | None = None) -> bytes:
+    def download_file(
+        self,
+        file_id: str,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> bytes:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         params["download"] = "true"
         try:
-            r = httpx.get(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=None)
+            r = httpx.get(
+                f"{self.base_url}/files/{file_id}",
+                params=params,
+                headers=headers,
+                timeout=None,
+            )
             r.raise_for_status()
             return r.content
         except httpx.HTTPError as e:
             raise AgentClientError(f"Download failed: {e}")
 
-    def delete_file(self, file_id: str, thread_id: str | None = None) -> None:
+    def delete_file(
+        self,
+        file_id: str,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> None:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
-            r = httpx.delete(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=self.timeout)
+            r = httpx.delete(
+                f"{self.base_url}/files/{file_id}",
+                params=params,
+                headers=headers,
+                timeout=self.timeout,
+            )
             r.raise_for_status()
         except httpx.HTTPError as e:
             raise AgentClientError(f"Delete failed: {e}")
 
-    def upload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes | IO[bytes], str | None]],
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> list[dict]:
         """
         Upload multiple files.
 
@@ -488,12 +595,23 @@ class AgentClient:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
             r = httpx.post(
                 f"{self.base_url}/files/upload",
                 params=params,
                 files=multipart,
-                headers=self._headers,
+                headers=headers,
                 timeout=None,
             )
             r.raise_for_status()
@@ -501,20 +619,39 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(f"Upload failed: {e}")
 
-    async def aupload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+    async def aupload_files(
+        self,
+        files: list[tuple[str, bytes | IO[bytes], str | None]],
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> list[dict]:
         multipart = []
         for name, data, mime in files:
             multipart.append(("files", (name, data, mime or "application/octet-stream")))
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         async with httpx.AsyncClient() as client:
             try:
                 r = await client.post(
                     f"{self.base_url}/files/upload",
                     params=params,
                     files=multipart,
-                    headers=self._headers,
+                    headers=headers,
                     timeout=None,
                 )
                 r.raise_for_status()

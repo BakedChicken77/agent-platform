@@ -174,3 +174,25 @@
 * **✔ Done.** Frontend event emission decoupled from `core.langgraph`; uses Langfuse client directly with graceful no-op fallback.
   * Introduced a Streamlit helper that resolves the Langfuse client and no-ops when tracing is disabled (`src/streamlit_app.py`).
 
+### ✅ **Step 6 Checklist Review**
+
+#### 1. **Instrument file lifecycle with Langfuse spans/events**
+
+**✔ Done.**
+
+* Added runtime-aware span and event helpers to every `files_router` endpoint so uploads, listings, downloads, and deletions emit Langfuse spans/events enriched with user/thread/filename metadata (`src/service/files_router.py`).
+* Extended client-side file operations to forward trace/session/run identifiers via headers/query params ensuring server spans link to the active trace (`src/client/client.py`, `src/streamlit_app.py`).
+
+#### 2. **Feedback hook records Langfuse scores**
+
+**✔ Done.**
+
+* Feedback endpoint now mirrors submissions to Langfuse by calling `create_score`/`score_current_trace` with comment and metadata fallbacks, reusing payload identifiers when present (`src/service/service.py`).
+
+#### 3. **Return Langfuse reference to clients**
+
+**✔ Done.**
+
+* `FeedbackResponse` exposes `langfuse_trace_id`/`langfuse_run_id`; the client surfaces these values to Streamlit so UI state stays aligned with the recorded trace (`src/schema/schema.py`, `src/client/client.py`, `src/streamlit_app.py`).
+* Documented the Feedback API response type and Langfuse header usage in the README and added an integration test that asserts `/files/upload` reads the `X-Langfuse-*` headers (`README.md`, `tests/service/test_service.py`).
+

@@ -7,7 +7,7 @@ import pytest
 from httpx import Request, Response
 
 from client import AgentClient, AgentClientError
-from schema import AgentInfo, ChatHistory, ChatMessage, ServiceMetadata
+from schema import AgentInfo, ChatHistory, ChatMessage, FeedbackResponse, ServiceMetadata
 from schema.models import OpenAIModelName
 
 
@@ -276,15 +276,24 @@ async def test_acreate_feedback(agent_client):
     original_kwargs = deepcopy(feedback_kwargs)
 
     # Test successful response
-    mock_response = Response(200, json={}, request=Request("POST", "http://test/feedback"))
+    mock_response = Response(
+        200,
+        json={
+            "status": "success",
+            "langfuse_trace_id": "trace-123",
+            "langfuse_run_id": "run-789",
+        },
+        request=Request("POST", "http://test/feedback"),
+    )
     with patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
-        await agent_client.acreate_feedback(
+        response = await agent_client.acreate_feedback(
             RUN_ID,
             KEY,
             SCORE,
             feedback_kwargs,
             trace_id="trace-123",
             session_id="session-456",
+            langfuse_run_id="run-789",
         )
         # Verify request
         _, call_kwargs = mock_post.call_args
@@ -301,6 +310,13 @@ async def test_acreate_feedback(agent_client):
         assert payload["kwargs"] is not feedback_kwargs  # ensure copy was created
         assert payload["kwargs"]["metadata"] is not feedback_kwargs["metadata"]
         assert feedback_kwargs == original_kwargs
+        headers = call_kwargs["headers"]
+        assert headers["X-Langfuse-Trace-Id"] == "trace-123"
+        assert headers["X-Langfuse-Session-Id"] == "session-456"
+        assert headers["X-Langfuse-Run-Id"] == "run-789"
+        assert isinstance(response, FeedbackResponse)
+        assert response.langfuse_trace_id == "trace-123"
+        assert response.langfuse_run_id == "run-789"
 
     # Test error response
     error_response = Response(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -29,8 +29,8 @@ def _truncate(text: str, limit: int = MAX_PREVIEW_LENGTH) -> str:
 
 
 def _coerce_str(value: Any) -> str:
-    if isinstance(value, (str, bytes, bytearray)):
-        data = value.decode() if isinstance(value, (bytes, bytearray)) else value
+    if isinstance(value, (str, bytes, bytearray)):  # noqa: UP038 - runtime requires tuple form
+        data = value.decode() if isinstance(value, (bytes, bytearray)) else value  # noqa: UP038
         return data
     try:
         return json.dumps(value, default=str)
@@ -47,7 +47,7 @@ def _preview(value: Any) -> str | None:
 def _payload_size(value: Any) -> int:
     if value is None:
         return 0
-    if isinstance(value, (bytes, bytearray)):
+    if isinstance(value, (bytes, bytearray)):  # noqa: UP038 - runtime requires tuple form
         return len(value)
     text = _coerce_str(value)
     return len(text)
@@ -65,6 +65,14 @@ def _extract_input(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     if args:
         return args[0]
     return kwargs.get("input")
+
+
+def _bind_method(tool: BaseTool, attr: str, func: Callable[..., Any]) -> None:
+    bound = func.__get__(tool, tool.__class__)
+    try:
+        setattr(tool, attr, bound)
+    except (AttributeError, TypeError, ValueError):
+        object.__setattr__(tool, attr, bound)
 
 
 def instrument_langfuse_tool(tool: BaseTool, *, name: str | None = None) -> BaseTool:
@@ -137,7 +145,7 @@ def instrument_langfuse_tool(tool: BaseTool, *, name: str | None = None) -> Base
         finally:
             _record(runtime, span, input_value=input_value, output_value=result, error=error, started_at=started_at)
 
-    tool.invoke = instrumented_invoke.__get__(tool, tool.__class__)  # type: ignore[assignment]
+    _bind_method(tool, "invoke", instrumented_invoke)
 
     if hasattr(tool, "ainvoke"):
         original_ainvoke = tool.ainvoke  # type: ignore[attr-defined]
@@ -167,7 +175,7 @@ def instrument_langfuse_tool(tool: BaseTool, *, name: str | None = None) -> Base
             finally:
                 _record(runtime, span, input_value=input_value, output_value=result, error=error, started_at=started_at)
 
-        tool.ainvoke = instrumented_ainvoke.__get__(tool, tool.__class__)  # type: ignore[assignment]
+        _bind_method(tool, "ainvoke", instrumented_ainvoke)
 
     tool.__langfuse_instrumented__ = True  # type: ignore[attr-defined]
     return tool
