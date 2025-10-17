@@ -1,6 +1,6 @@
 
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -64,11 +64,13 @@ def test_app_settings(mock_agent_client):
 
     # Check the args match the settings
     assert mock_agent_client.agent == "chatbot"
+    assert "trace_id" in at.session_state
     mock_agent_client.ainvoke.assert_called_with(
         message=PROMPT,
         model=OpenAIModelName.GPT_4O_MINI,
         thread_id=at.session_state.thread_id,
-        user_id="1234",
+        trace_id=at.session_state.trace_id,
+        session_id=at.session_state.thread_id,
     )
     assert not at.exception
 
@@ -117,6 +119,11 @@ async def test_app_streaming(mock_agent_client):
     )
     tool_message = ChatMessage(type="tool", content="42", tool_call_id="test_call_id")
     final_ai_message = ChatMessage(type="ai", content="The answer is 42")
+    final_ai_message.custom_data["langfuse"] = {
+        "trace_id": "trace-123",
+        "session_id": "session-abc",
+        "run_id": "run-xyz",
+    }
 
     messages = [ai_with_tool, tool_message, final_ai_message]
 
@@ -143,6 +150,19 @@ async def test_app_streaming(mock_agent_client):
     assert tool_status.markdown[2].value == "42"
     assert response.markdown[-1].value == "The answer is 42"
     assert not at.exception
+
+    mock_agent_client.astream.assert_called_with(
+        message=PROMPT,
+        model=ANY,
+        thread_id=at.session_state.thread_id,
+        agent_config=ANY,
+        stream_tokens=True,
+        trace_id=at.session_state.trace_id,
+        session_id=at.session_state.thread_id,
+    )
+    assert at.session_state.get("langfuse_trace_id") == "trace-123"
+    assert at.session_state.get("langfuse_session_id") == "session-abc"
+    assert at.session_state.get("langfuse_run_id") == "run-xyz"
 
 
 @pytest.mark.asyncio

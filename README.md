@@ -113,6 +113,7 @@ To capture traces and metrics with [Langfuse](https://langfuse.com/):
 
 * The Feedback API returns a `FeedbackResponse` payload that surfaces `langfuse_trace_id` and `langfuse_run_id` so clients can link UI state with the recorded trace.
 * File endpoints accept optional `X-Langfuse-Trace-Id`, `X-Langfuse-Session-Id`, and `X-Langfuse-Run-Id` headers. These values are ingested into the runtime context alongside any query parameters, allowing uploads to be stitched to the active trace.
+* Streaming responses include a `langfuse` envelope per SSE event and embed metadata within each `ChatMessage.custom_data['langfuse']`, allowing clients to hydrate UI state with the active trace, session, and run identifiers.
 
 ```bash
 curl -X POST "http://localhost:8080/files/upload?thread_id=thread-123" \

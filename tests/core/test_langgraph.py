@@ -5,6 +5,7 @@ from langchain_core.runnables import RunnableConfig
 
 from core.langgraph import (
     LANGFUSE_STATE_KEY,
+    emit_runtime_event,
     instrument_langgraph_node,
     persist_langfuse_state,
 )
@@ -86,3 +87,27 @@ def test_persist_langfuse_state_merges_sources():
     assert result[LANGFUSE_STATE_KEY]["session_id"] == "session-1"
     assert result[LANGFUSE_STATE_KEY]["run_id"] == "run-99"
     assert result[LANGFUSE_STATE_KEY]["agent_name"] == "agent-x"
+
+
+def test_emit_runtime_event_includes_context(monkeypatch):
+    events: list[dict[str, object]] = []
+
+    class DummyClient:
+        def event(self, **kwargs):
+            events.append(kwargs)
+
+    dummy = DummyClient()
+    monkeypatch.setattr("core.langgraph.get_langfuse_client", lambda: dummy)
+
+    runtime = {"trace_id": "trace", "session_id": "session", "user_id": "user"}
+    emit_runtime_event("agent.test", runtime, metadata={"step": "start"})
+
+    assert events == [
+        {
+            "name": "agent.test",
+            "metadata": {"step": "start"},
+            "trace_id": "trace",
+            "session_id": "session",
+            "user_id": "user",
+        }
+    ]

@@ -224,6 +224,42 @@ def emit_frontend_event(name: str, metadata: dict[str, Any] | None = None) -> No
         logger.debug("Langfuse event %s failed; continuing without telemetry", name, exc_info=True)
 
 
+def _store_stream_langfuse_metadata(message: ChatMessage) -> None:
+    """Persist Langfuse identifiers from streamed messages into session state."""
+
+    if not isinstance(message.custom_data, dict):
+        return
+
+    langfuse_meta = message.custom_data.get("langfuse")
+    if not isinstance(langfuse_meta, dict):
+        return
+
+    changed = False
+
+    trace_id = langfuse_meta.get("trace_id")
+    if trace_id and st.session_state.get("langfuse_trace_id") != trace_id:
+        st.session_state["langfuse_trace_id"] = trace_id
+        changed = True
+
+    session_id = langfuse_meta.get("session_id")
+    if session_id and st.session_state.get("langfuse_session_id") != session_id:
+        st.session_state["langfuse_session_id"] = session_id
+        changed = True
+
+    run_id = langfuse_meta.get("run_id") or message.run_id
+    if run_id and st.session_state.get("langfuse_run_id") != run_id:
+        st.session_state["langfuse_run_id"] = run_id
+        changed = True
+
+    user_id = langfuse_meta.get("user_id")
+    if user_id and st.session_state.get("langfuse_user_id") != user_id:
+        st.session_state["langfuse_user_id"] = user_id
+        changed = True
+
+    if changed:
+        update_langfuse_runtime()
+
+
 def render_trace_link() -> None:
     """Render a Langfuse trace hyperlink when configuration allows."""
 
@@ -672,6 +708,8 @@ async def draw_messages(
             st.error(f"Unexpected message type: {type(msg)}")
             st.write(msg)
             st.stop()
+
+        _store_stream_langfuse_metadata(msg)
 
         match msg.type:
             # A message from the user, the easiest case
