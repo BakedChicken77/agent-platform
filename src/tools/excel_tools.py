@@ -1,6 +1,7 @@
 import os
 from langchain_core.tools import BaseTool, tool
 from core import settings
+from core.tools import instrument_langfuse_tool
 import openpyxl
 
 
@@ -45,4 +46,5 @@ def write_to_xlsx(data: list) -> str:
     return f"Data written to {output_file} in sheet {sheet_name}."
 
 write_to_excel: BaseTool = tool(write_to_xlsx)
-write_to_excel.name = "write_to_excel_xlsx_file"  
+write_to_excel.name = "write_to_excel_xlsx_file"
+write_to_excel = instrument_langfuse_tool(write_to_excel, name="write_to_excel_xlsx_file")

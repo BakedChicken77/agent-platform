@@ -5,6 +5,8 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side, NamedStyle
 from langchain_core.tools import tool
+
+from core.tools import instrument_langfuse_tool
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import shutil
@@ -843,3 +845,33 @@ def add_row_to_named_sheet(file_path: str, sheet_name: str, row_data: List[str])
         return f"Successfully added the new row to sheet '{sheet_name}' with appropriate styling and formatting. Backup created: {backup_path}"
     except Exception as e:
         return f"An unexpected error occurred: {e}"
+
+
+# Instrument Langfuse telemetry for all generic Excel tools
+update_cell_in_unstructured_sheet = instrument_langfuse_tool(
+    update_cell_in_unstructured_sheet, name="update_cell_in_unstructured_sheet"
+)
+insert_row_after_anchor = instrument_langfuse_tool(
+    insert_row_after_anchor, name="insert_row_after_anchor"
+)
+insert_row_at_position = instrument_langfuse_tool(
+    insert_row_at_position, name="insert_row_at_position"
+)
+apply_styling_to_all_rows = instrument_langfuse_tool(
+    apply_styling_to_all_rows, name="apply_styling_to_all_rows"
+)
+find_and_add_row_in_excel = instrument_langfuse_tool(
+    find_and_add_row_in_excel, name="find_and_add_row_in_excel"
+)
+update_row = instrument_langfuse_tool(update_row, name="update_row")
+delete_row = instrument_langfuse_tool(delete_row, name="delete_row")
+list_sheets = instrument_langfuse_tool(list_sheets, name="list_sheets")
+inspect_excel_file = instrument_langfuse_tool(
+    inspect_excel_file, name="inspect_excel_file"
+)
+answer_question_from_excel = instrument_langfuse_tool(
+    answer_question_from_excel, name="answer_question_from_excel"
+)
+add_row_to_named_sheet = instrument_langfuse_tool(
+    add_row_to_named_sheet, name="add_row_to_named_sheet"
+)

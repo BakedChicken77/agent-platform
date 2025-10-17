@@ -3,7 +3,7 @@
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any, IO
+from typing import IO, Any
 
 import httpx
 
@@ -12,6 +12,7 @@ from schema import (
     ChatHistoryInput,
     ChatMessage,
     Feedback,
+    FeedbackResponse,
     ServiceMetadata,
     StreamInput,
     UserInput,
@@ -70,6 +71,46 @@ class AgentClient:
             headers["Authorization"] = f"Bearer {self.auth_secret}"
         return headers
 
+    def _with_langfuse_headers(
+        self,
+        *,
+        base: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, str]:
+        headers = dict(base or self._headers)
+        if trace_id:
+            headers["X-Langfuse-Trace-Id"] = trace_id
+        if session_id:
+            headers["X-Langfuse-Session-Id"] = session_id
+        if run_id:
+            headers["X-Langfuse-Run-Id"] = run_id
+        return headers
+
+    def _prepare_agent_config(
+        self,
+        agent_config: dict[str, Any] | None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Merge Langfuse identifiers into ``agent_config`` when provided."""
+
+        extras = {
+            key: value
+            for key, value in {"trace_id": trace_id, "session_id": session_id}.items()
+            if value
+        }
+        if not extras:
+            return agent_config
+
+        config = dict(agent_config or {})
+        langfuse_config = dict(config.get("langfuse", {}))
+        langfuse_config.update(extras)
+        config["langfuse"] = langfuse_config
+        return config
+
     def retrieve_info(self) -> None:
         try:
             response = httpx.get(
@@ -102,6 +143,9 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent asynchronously. Only the final message is returned.
@@ -112,6 +156,8 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             AnyMessage: The response from the agent
@@ -123,6 +169,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         async with httpx.AsyncClient() as client:
@@ -145,6 +194,9 @@ class AgentClient:
         model: str | None = None,
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> ChatMessage:
         """
         Invoke the agent synchronously. Only the final message is returned.
@@ -155,6 +207,8 @@ class AgentClient:
             model (str, optional): LLM model to use for the agent
             thread_id (str, optional): Thread ID for continuing a conversation
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             ChatMessage: The response from the agent
@@ -166,6 +220,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         try:
@@ -213,6 +270,9 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Generator[ChatMessage | str, None, None]:
         """
         Stream the agent's response synchronously.
@@ -229,6 +289,8 @@ class AgentClient:
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             Generator[ChatMessage | str, None, None]: The response from the agent
@@ -240,6 +302,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         try:
@@ -267,6 +332,9 @@ class AgentClient:
         thread_id: str | None = None,
         agent_config: dict[str, Any] | None = None,
         stream_tokens: bool = True,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncGenerator[ChatMessage | str, None]:
         """
         Stream the agent's response asynchronously.
@@ -284,6 +352,8 @@ class AgentClient:
             agent_config (dict[str, Any], optional): Additional configuration to pass through to the agent
             stream_tokens (bool, optional): Stream tokens as they are generated
                 Default: True
+            trace_id (str, optional): Existing Langfuse trace identifier to reuse
+            session_id (str, optional): Session identifier for Langfuse (defaults to thread_id)
 
         Returns:
             AsyncGenerator[ChatMessage | str, None]: The response from the agent
@@ -295,6 +365,9 @@ class AgentClient:
             request.thread_id = thread_id
         if model:
             request.model = model  # type: ignore[assignment]
+        agent_config = self._prepare_agent_config(
+            agent_config, trace_id=trace_id, session_id=session_id
+        )
         if agent_config:
             request.agent_config = agent_config
         async with httpx.AsyncClient() as client:
@@ -317,8 +390,16 @@ class AgentClient:
                 raise AgentClientError(f"Error: {e}")
 
     async def acreate_feedback(
-        self, run_id: str, key: str, score: float, kwargs: dict[str, Any] = {}
-    ) -> None:
+        self,
+        run_id: str,
+        key: str,
+        score: float,
+        kwargs: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> FeedbackResponse:
         """
         Create a feedback record for a run.
 
@@ -326,17 +407,45 @@ class AgentClient:
         credentials can be stored and managed in the service rather than the client.
         See: https://api.smith.langchain.com/redoc#tag/feedback/operation/create_feedback_api_v1_feedback_post
         """
-        request = Feedback(run_id=run_id, key=key, score=score, kwargs=kwargs)
+        payload_kwargs: dict[str, Any] = dict(kwargs or {})
+        metadata: dict[str, Any] | None = None
+        if payload_kwargs.get("metadata") is not None:
+            metadata = dict(payload_kwargs["metadata"])
+        elif trace_id or session_id:
+            metadata = {}
+
+        if metadata is not None:
+            if trace_id:
+                metadata["langfuse_trace_id"] = trace_id
+            if session_id:
+                metadata["langfuse_session_id"] = session_id
+            payload_kwargs["metadata"] = metadata
+
+        request = Feedback(
+            run_id=run_id,
+            key=key,
+            score=score,
+            kwargs=payload_kwargs,
+            trace_id=trace_id,
+            session_id=session_id,
+            langfuse_run_id=langfuse_run_id,
+        )
+        payload = request.model_dump(exclude_none=True)
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     f"{self.base_url}/feedback",
-                    json=request.model_dump(),
-                    headers=self._headers,
+                    json=payload,
+                    headers=headers,
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                response.json()
+                return FeedbackResponse.model_validate(response.json())
             except httpx.HTTPError as e:
                 raise AgentClientError(f"Error: {e}")
 
@@ -362,40 +471,119 @@ class AgentClient:
         return ChatHistory.model_validate(response.json())
 
     # ---------- Files API ----------
-    def list_files(self, thread_id: str | None = None) -> dict:
+    def list_files(
+        self,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> dict:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
-            r = httpx.get(f"{self.base_url}/files", params=params, headers=self._headers, timeout=self.timeout)
+            r = httpx.get(
+                f"{self.base_url}/files",
+                params=params,
+                headers=headers,
+                timeout=self.timeout,
+            )
             r.raise_for_status()
             return r.json()
         except httpx.HTTPError as e:
             raise AgentClientError(f"List files failed: {e}")
 
-    def download_file(self, file_id: str, thread_id: str | None = None) -> bytes:
+    def download_file(
+        self,
+        file_id: str,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> bytes:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         params["download"] = "true"
         try:
-            r = httpx.get(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=None)
+            r = httpx.get(
+                f"{self.base_url}/files/{file_id}",
+                params=params,
+                headers=headers,
+                timeout=None,
+            )
             r.raise_for_status()
             return r.content
         except httpx.HTTPError as e:
             raise AgentClientError(f"Download failed: {e}")
 
-    def delete_file(self, file_id: str, thread_id: str | None = None) -> None:
+    def delete_file(
+        self,
+        file_id: str,
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> None:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
-            r = httpx.delete(f"{self.base_url}/files/{file_id}", params=params, headers=self._headers, timeout=self.timeout)
+            r = httpx.delete(
+                f"{self.base_url}/files/{file_id}",
+                params=params,
+                headers=headers,
+                timeout=self.timeout,
+            )
             r.raise_for_status()
         except httpx.HTTPError as e:
             raise AgentClientError(f"Delete failed: {e}")
 
-    def upload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes | IO[bytes], str | None]],
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> list[dict]:
         """
         Upload multiple files.
 
@@ -407,12 +595,23 @@ class AgentClient:
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         try:
             r = httpx.post(
                 f"{self.base_url}/files/upload",
                 params=params,
                 files=multipart,
-                headers=self._headers,
+                headers=headers,
                 timeout=None,
             )
             r.raise_for_status()
@@ -420,20 +619,39 @@ class AgentClient:
         except httpx.HTTPError as e:
             raise AgentClientError(f"Upload failed: {e}")
 
-    async def aupload_files(self, files: list[tuple[str, bytes | IO[bytes], str | None]], thread_id: str | None = None) -> list[dict]:
+    async def aupload_files(
+        self,
+        files: list[tuple[str, bytes | IO[bytes], str | None]],
+        thread_id: str | None = None,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        langfuse_run_id: str | None = None,
+    ) -> list[dict]:
         multipart = []
         for name, data, mime in files:
             multipart.append(("files", (name, data, mime or "application/octet-stream")))
         params = {}
         if thread_id:
             params["thread_id"] = thread_id
+        if trace_id:
+            params["trace_id"] = trace_id
+        if session_id:
+            params["session_id"] = session_id
+        if langfuse_run_id:
+            params["run_id"] = langfuse_run_id
+        headers = self._with_langfuse_headers(
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=langfuse_run_id,
+        )
         async with httpx.AsyncClient() as client:
             try:
                 r = await client.post(
                     f"{self.base_url}/files/upload",
                     params=params,
                     files=multipart,
-                    headers=self._headers,
+                    headers=headers,
                     timeout=None,
                 )
                 r.raise_for_status()

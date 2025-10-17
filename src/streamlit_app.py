@@ -1,24 +1,25 @@
 # src/streamlit_app.py
 
 import asyncio
+import logging
 import os
 import urllib.parse
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
-import streamlit as st
 import msal  # ← Added for Azure AD OAuth2
+import plotly.io as pio
+import streamlit as st
 from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from client import AgentClient, AgentClientError
-from schema import ChatHistory, ChatMessage
+from core.langfuse import build_trace_url, get_langfuse_client
+from schema import ChatMessage
 from schema.task_data import TaskData, TaskDataStatus
 
-from io import BytesIO
-
-import json
-import plotly.io as pio 
+logger = logging.getLogger(__name__)
 
 if os.getenv("ST_DEBUGPY", "0") == "1" and os.getenv("DEBUGPY_LAUNCHER_PORT") is None:
     import debugpy
@@ -41,6 +42,8 @@ if os.getenv("ST_DEBUGPY", "0") == "1" and os.getenv("DEBUGPY_LAUNCHER_PORT") is
 APP_TITLE = "AIS Agent Platform"
 APP_ICON = "🤖"
 USER_ID_COOKIE = "user_id"
+TRACE_ID_QUERY_PARAM = "trace_id"
+DEBUG = False
 
 # ——— OAuth2 Configuration ———
 load_dotenv()
@@ -89,6 +92,17 @@ def get_or_create_user_id() -> str:
     st.query_params[USER_ID_COOKIE] = user_id
 
     return user_id
+
+
+def _get_query_param(name: str) -> str | None:
+    """Return the first query parameter value for ``name`` if present."""
+
+    value = st.query_params.get(name)
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value[0]
+    return value
 
 def render_payload(content: str) -> bool:
     """
@@ -154,6 +168,106 @@ def write_any(content: str, *, in_status=None):
     else:
         st.write(content)
 
+
+
+def update_langfuse_runtime(agent_client: AgentClient | None = None) -> None:
+    """Cache the current Langfuse runtime context in session state."""
+
+    trace_id = st.session_state.get("trace_id")
+    if not trace_id:
+        st.session_state.langfuse_runtime = None
+        return
+
+    runtime: dict[str, Any] = {"trace_id": trace_id}
+    thread_id = st.session_state.get("thread_id")
+    if thread_id:
+        runtime["session_id"] = thread_id
+        runtime["thread_id"] = thread_id
+    user_id = st.session_state.get(USER_ID_COOKIE)
+    if user_id:
+        runtime["user_id"] = user_id
+    if agent_client and agent_client.agent:
+        runtime["agent_name"] = agent_client.agent
+
+    st.session_state.langfuse_runtime = runtime
+
+
+def emit_frontend_event(name: str, metadata: dict[str, Any] | None = None) -> None:
+    """Emit a Langfuse event scoped to the current frontend runtime."""
+
+    try:
+        client = get_langfuse_client()
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Skipping frontend event %s; Langfuse client unavailable", name, exc_info=True)
+        return
+
+    if client is None:
+        return
+
+    trace_id = st.session_state.get("trace_id") or st.session_state.get("langfuse_trace_id")
+    session_id = st.session_state.get("thread_id") or st.session_state.get("langfuse_session_id")
+    user_id = st.session_state.get(USER_ID_COOKIE)
+
+    event_payload: dict[str, Any] = {"name": name}
+    if metadata:
+        event_payload["metadata"] = metadata
+    if trace_id:
+        event_payload["trace_id"] = trace_id
+    if session_id:
+        event_payload["session_id"] = session_id
+    if user_id:
+        event_payload["user_id"] = user_id
+
+    try:
+        client.event(**event_payload)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Langfuse event %s failed; continuing without telemetry", name, exc_info=True)
+
+
+def _store_stream_langfuse_metadata(message: ChatMessage) -> None:
+    """Persist Langfuse identifiers from streamed messages into session state."""
+
+    if not isinstance(message.custom_data, dict):
+        return
+
+    langfuse_meta = message.custom_data.get("langfuse")
+    if not isinstance(langfuse_meta, dict):
+        return
+
+    changed = False
+
+    trace_id = langfuse_meta.get("trace_id")
+    if trace_id and st.session_state.get("langfuse_trace_id") != trace_id:
+        st.session_state["langfuse_trace_id"] = trace_id
+        changed = True
+
+    session_id = langfuse_meta.get("session_id")
+    if session_id and st.session_state.get("langfuse_session_id") != session_id:
+        st.session_state["langfuse_session_id"] = session_id
+        changed = True
+
+    run_id = langfuse_meta.get("run_id") or message.run_id
+    if run_id and st.session_state.get("langfuse_run_id") != run_id:
+        st.session_state["langfuse_run_id"] = run_id
+        changed = True
+
+    user_id = langfuse_meta.get("user_id")
+    if user_id and st.session_state.get("langfuse_user_id") != user_id:
+        st.session_state["langfuse_user_id"] = user_id
+        changed = True
+
+    if changed:
+        update_langfuse_runtime()
+
+
+def render_trace_link() -> None:
+    """Render a Langfuse trace hyperlink when configuration allows."""
+
+    trace_url = build_trace_url(st.session_state.get("trace_id"))
+    if not trace_url:
+        return
+
+    st.markdown(f"[🔗 View in Langfuse]({trace_url})")
 
 
 async def main() -> None:
@@ -280,18 +394,37 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
     agent_client: AgentClient = st.session_state.agent_client
 
     if "thread_id" not in st.session_state:
-        thread_id = st.query_params.get("thread_id")
+        thread_id = _get_query_param("thread_id")
         if not thread_id:
             thread_id = str(uuid.uuid4())
             messages = []
         else:
             try:
-                messages: ChatHistory = agent_client.get_history(thread_id=thread_id).messages
+                messages = agent_client.get_history(thread_id=thread_id).messages
             except AgentClientError:
                 st.error("No message history found for this Thread ID.")
                 messages = []
         st.session_state.messages = messages
         st.session_state.thread_id = thread_id
+
+    if "trace_id" not in st.session_state:
+        trace_id = _get_query_param(TRACE_ID_QUERY_PARAM)
+        if not trace_id:
+            trace_id = str(uuid.uuid4())
+        st.session_state.trace_id = trace_id
+        st.query_params[TRACE_ID_QUERY_PARAM] = trace_id
+
+    update_langfuse_runtime(agent_client)
+
+    if not st.session_state.get("langfuse_page_load_event_sent"):
+        emit_frontend_event(
+            "frontend.page_load",
+            {
+                "app": "streamlit",
+                "agent": agent_client.agent,
+            },
+        )
+        st.session_state.langfuse_page_load_event_sent = True
 
     # Config options
     with st.sidebar:
@@ -306,6 +439,9 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
         if st.button(":material/chat: New Chat", use_container_width=True):
             st.session_state.messages = []
             st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.trace_id = str(uuid.uuid4())
+            st.query_params[TRACE_ID_QUERY_PARAM] = st.session_state.trace_id
+            update_langfuse_runtime(agent_client)
             st.rerun()
 
         with st.popover(":material/settings: Agents/Workflows", use_container_width=True):
@@ -352,6 +488,7 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
             # Include both thread_id and user_id in the URL for sharing to maintain user identity
             chat_url = (
                 f"{st_base_url}?thread_id={st.session_state.thread_id}&{USER_ID_COOKIE}={user_id}"
+                f"&{TRACE_ID_QUERY_PARAM}={st.session_state.trace_id}"
             )
             st.markdown(f"**Chat URL:**\n```text\n{chat_url}\n```")
             st.info("Copy the above URL to share or revisit this chat")
@@ -387,7 +524,23 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                         for f in up_files:
                             payload.append((f.name, f.getvalue(), f.type))
                         try:
-                            resp = agent_client.upload_files(payload, thread_id=st.session_state.thread_id)
+                            resp = agent_client.upload_files(
+                                payload,
+                                thread_id=st.session_state.thread_id,
+                                trace_id=st.session_state.get("trace_id")
+                                or st.session_state.get("langfuse_trace_id"),
+                                session_id=st.session_state.get("thread_id")
+                                or st.session_state.get("langfuse_session_id"),
+                                langfuse_run_id=st.session_state.get("langfuse_run_id"),
+                            )
+                            emit_frontend_event(
+                                "frontend.file_upload",
+                                {
+                                    "count": len(payload),
+                                    "ingest": do_ingest,
+                                    "filenames": [name for name, *_ in payload],
+                                },
+                            )
                             # Render per-file outcomes
                             for item in resp:
                                 state = item.get("status")
@@ -406,8 +559,18 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                             status_box.update(label="Upload complete", state="complete")
                         except AgentClientError as e:
                             status_box.update(label="Upload failed", state="error")
+                            emit_frontend_event(
+                                "frontend.file_upload.error",
+                                {
+                                    "count": len(payload),
+                                    "ingest": do_ingest,
+                                    "error": str(e),
+                                },
+                            )
                             st.error(str(e))
 
+
+    update_langfuse_runtime(agent_client)
 
     # Draw existing messages
     messages: list[ChatMessage] = st.session_state.messages
@@ -448,6 +611,8 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
+                    trace_id=st.session_state.trace_id,
+                    session_id=st.session_state.thread_id,
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 await draw_messages(stream, is_new=True)
@@ -456,6 +621,8 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
                     message=user_input,
                     model=model,
                     thread_id=st.session_state.thread_id,
+                    trace_id=st.session_state.trace_id,
+                    session_id=st.session_state.thread_id,
                     # user_id is no longer sent; identity comes from JWT on the server
                 )
                 messages.append(response)
@@ -468,6 +635,7 @@ header [data-testid="stAppTabBar"] a[href*="/streamlit_app?"] { display: none !i
     # If messages have been generated, show feedback widget
     if len(messages) > 0 and st.session_state.last_message:
         with st.session_state.last_message:
+            render_trace_link()
             await handle_feedback()
 
 
@@ -540,6 +708,8 @@ async def draw_messages(
             st.error(f"Unexpected message type: {type(msg)}")
             st.write(msg)
             st.stop()
+
+        _store_stream_langfuse_metadata(msg)
 
         match msg.type:
             # A message from the user, the easiest case
@@ -669,15 +839,32 @@ async def handle_feedback() -> None:
 
         agent_client: AgentClient = st.session_state.agent_client
         try:
-            await agent_client.acreate_feedback(
+            feedback_kwargs = {"comment": "In-line human feedback"}
+            response = await agent_client.acreate_feedback(
                 run_id=latest_run_id,
                 key="human-feedback-stars",
                 score=normalized_score,
-                kwargs={"comment": "In-line human feedback"},
+                kwargs=feedback_kwargs,
+                trace_id=st.session_state.get("trace_id")
+                or st.session_state.get("langfuse_trace_id"),
+                session_id=st.session_state.get("thread_id")
+                or st.session_state.get("langfuse_session_id"),
+                langfuse_run_id=st.session_state.get("langfuse_run_id"),
             )
+            if response.langfuse_trace_id:
+                st.session_state["langfuse_trace_id"] = response.langfuse_trace_id
+            if response.langfuse_run_id:
+                st.session_state["langfuse_run_id"] = response.langfuse_run_id
         except AgentClientError as e:
             st.error(f"Error recording feedback: {e}")
             st.stop()
+        emit_frontend_event(
+            "frontend.feedback_submitted",
+            {
+                "score": normalized_score,
+                "run_id": latest_run_id,
+            },
+        )
         st.session_state.last_feedback = (latest_run_id, feedback)
         st.toast("Feedback recorded", icon=":material/reviews:")
 
@@ -689,6 +876,7 @@ async def handle_agent_msgs(messages_agen, call_results, is_new):
     until it reaches the final AI message.
     """
     nested_popovers = {}
+    status = None
     # looking for the Success tool call message
     first_msg = await anext(messages_agen, None)
     if first_msg is None:
