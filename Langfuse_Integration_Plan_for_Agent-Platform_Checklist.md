@@ -196,3 +196,36 @@
 * `FeedbackResponse` exposes `langfuse_trace_id`/`langfuse_run_id`; the client surfaces these values to Streamlit so UI state stays aligned with the recorded trace (`src/schema/schema.py`, `src/client/client.py`, `src/streamlit_app.py`).
 * Documented the Feedback API response type and Langfuse header usage in the README and added an integration test that asserts `/files/upload` reads the `X-Langfuse-*` headers (`README.md`, `tests/service/test_service.py`).
 
+### ✅ **Step 7 Checklist Review**
+
+#### 1. **Unit tests for spans, errors, and events**
+
+**✔ Done.**
+
+* Added `tests/service/test_service_langfuse.py` covering `_start_langfuse_span`, `_end_span`, and `_handle_input` with mocked clients/handlers to assert span metadata, error propagation, and callback attachment.
+* Extended `tests/core/test_langgraph.py` with `test_emit_runtime_event_includes_context` to verify Langfuse event emission arguments when `get_langfuse_client()` is mocked.
+
+#### 2. **Streaming regression coverage**
+
+**✔ Done.**
+
+* `tests/service/test_service_streaming.py::test_message_generator_includes_langfuse_metadata` asserts SSE payloads include the `langfuse` envelope, `ChatMessage.custom_data` metadata, and that the prepared callbacks flow through to `agent.astream`.
+
+#### 3. **Client & Streamlit trace propagation**
+
+**✔ Done.**
+
+* Updated `tests/app/test_streamlit_app.py` to assert `AgentClient` streaming/invoke calls receive `trace_id`/`session_id`, and that Streamlit session state captures `langfuse_trace_id`, `langfuse_session_id`, and `langfuse_run_id` emitted from SSE metadata.
+
+#### 4. **Documentation refresh**
+
+**✔ Done.**
+
+* README now documents the SSE `langfuse` envelope and metadata embedding, while the new `CONTRIBUTING.md` outlines the Langfuse environment variables required for local development.
+
+#### 5. **CI Langfuse fixtures**
+
+**✔ Done.**
+
+* Default dummy Langfuse credentials are provided via the shared `mock_env` fixture (`tests/conftest.py`) so tests execute without touching the network.
+

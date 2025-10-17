@@ -26,6 +26,16 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def mock_env():
     """Fixture to ensure environment is clean for each test."""
-    with patch.dict(os.environ, {}, clear=True):
+    defaults = {
+        "OPENAI_API_KEY": "test-openai-key",
+        "LANGFUSE_PUBLIC_KEY": "test-langfuse-public",
+        "LANGFUSE_SECRET_KEY": "test-langfuse-secret",
+        "AZURE_AD_TENANT_ID": "test-tenant",
+        "AZURE_AD_CLIENT_ID": "test-client",
+        "AZURE_AD_CLIENT_SECRET": "test-secret",
+        "AZURE_AD_API_CLIENT_ID": "test-api-client",
+        "STREAMLIT_REDIRECT_URI": "http://localhost/callback",
+    }
+    with patch.dict(os.environ, defaults, clear=True):
         yield
 

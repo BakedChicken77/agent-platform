@@ -338,6 +338,35 @@ def _serialize_user_input(user_input: UserInput | StreamInput) -> dict[str, Any]
     return {k: v for k, v in payload.items() if v is not None}
 
 
+def _langfuse_stream_payload(telemetry: LangfuseTelemetry, run_id: UUID | str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "trace_id": telemetry.trace_id,
+        "run_id": str(run_id),
+    }
+    if telemetry.session_id:
+        payload["session_id"] = telemetry.session_id
+    if telemetry.user_id:
+        payload["user_id"] = telemetry.user_id
+    return payload
+
+
+def _attach_langfuse_metadata(
+    message: ChatMessage, telemetry: LangfuseTelemetry, run_id: UUID | str
+) -> None:
+    if message.run_id is None:
+        message.run_id = str(run_id)
+    langfuse_meta = _langfuse_stream_payload(telemetry, run_id)
+    existing = (
+        message.custom_data.get("langfuse")
+        if isinstance(message.custom_data, dict)
+        else None
+    )
+    if isinstance(existing, dict):
+        existing.update(langfuse_meta)
+        langfuse_meta = existing
+    message.custom_data["langfuse"] = langfuse_meta
+
+
 def _record_stream_message_span(
     telemetry: LangfuseTelemetry, parent_span: Any | None, message: ChatMessage
 ) -> None:
@@ -567,6 +596,7 @@ async def invoke(user_input: UserInput, request: Request, agent_id: str = DEFAUL
     else:
         _end_span(span)
         output.run_id = str(run_id)
+        _attach_langfuse_metadata(output, telemetry, run_id)
         return output
 
 
@@ -647,9 +677,15 @@ async def message_generator(
                     try:
                         chat_message = langchain_to_chat_message(message)
                         chat_message.run_id = str(run_id)
+                        _attach_langfuse_metadata(chat_message, telemetry, run_id)
                     except Exception as e:
                         logger.error(f"Error parsing message: {e}")
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
+                        error_payload = {
+                            "type": "error",
+                            "content": "Unexpected error",
+                            "langfuse": _langfuse_stream_payload(telemetry, run_id),
+                        }
+                        yield f"data: {json.dumps(error_payload)}\n\n"
                         continue
                     if (
                         isinstance(user_input, StreamInput)
@@ -660,7 +696,12 @@ async def message_generator(
                     if stream_span is not None:
                         _record_stream_message_span(telemetry, stream_span, chat_message)
                     message_count += 1
-                    yield f"data: {json.dumps({'type': 'message', 'content': chat_message.model_dump()})}\n\n"
+                    message_payload = {
+                        "type": "message",
+                        "content": chat_message.model_dump(),
+                        "langfuse": _langfuse_stream_payload(telemetry, run_id),
+                    }
+                    yield f"data: {json.dumps(message_payload)}\n\n"
 
                 if stream_mode == "messages":
                     if not user_input.stream_tokens:
@@ -676,21 +717,43 @@ async def message_generator(
 
                         if text.startswith("PLOTLY_JSON:"):
                             payload = text[len("PLOTLY_JSON:"):]
-                            yield f"data: {json.dumps({'type':'event', 'event':'plotly', 'content': payload})}\n\n"
+                            event_payload = {
+                                "type": "event",
+                                "event": "plotly",
+                                "content": payload,
+                                "langfuse": _langfuse_stream_payload(telemetry, run_id),
+                            }
+                            yield f"data: {json.dumps(event_payload)}\n\n"
                             continue
                         if text.startswith("DATA_URI:"):
                             payload = text[len("DATA_URI:"):]
-                            yield f"data: {json.dumps({'type':'event', 'event':'image', 'content': payload})}\n\n"
+                            event_payload = {
+                                "type": "event",
+                                "event": "image",
+                                "content": payload,
+                                "langfuse": _langfuse_stream_payload(telemetry, run_id),
+                            }
+                            yield f"data: {json.dumps(event_payload)}\n\n"
                             continue
 
                         if stream_span is not None:
                             _record_stream_token_span(telemetry, stream_span, text)
                         token_count += 1
-                        yield f"data: {json.dumps({'type':'token', 'content': text})}\n\n"
+                        token_payload = {
+                            "type": "token",
+                            "content": text,
+                            "langfuse": _langfuse_stream_payload(telemetry, run_id),
+                        }
+                        yield f"data: {json.dumps(token_payload)}\n\n"
     except Exception as e:
         error = e
         logger.error(f"Error in message generator: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Internal server error'})}\n\n"
+        error_payload = {
+            "type": "error",
+            "content": "Internal server error",
+            "langfuse": _langfuse_stream_payload(telemetry, run_id),
+        }
+        yield f"data: {json.dumps(error_payload)}\n\n"
     finally:
         if stream_span is not None:
             _update_span(
