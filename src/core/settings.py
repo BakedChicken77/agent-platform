@@ -1,10 +1,13 @@
 ## src/core/settings.py
 
+import os
 from enum import StrEnum
-from functools import lru_cache
 from json import loads
+from typing import Annotated, Any, List
+
 from pathlib import Path
-from typing import Annotated, Any
+
+from functools import lru_cache
 
 from dotenv import find_dotenv
 from pydantic import (
@@ -54,7 +57,7 @@ class Settings(BaseSettings):
 
     AUTH_SECRET: SecretStr | None = None
 
-    WHITELIST: list[str] = Field(default_factory=list, env="WHITELIST")
+    WHITELIST: List[str] = Field(default_factory=list, env="WHITELIST")
 
     # —— Entra ID OAuth2 settings ——
     AZURE_AD_TENANT_ID: str | None = None
@@ -91,11 +94,8 @@ class Settings(BaseSettings):
 
     LANGFUSE_TRACING: bool = False
     LANGFUSE_HOST: Annotated[str, BeforeValidator(check_str_is_http)] = "https://cloud.langfuse.com"
-    LANGFUSE_PUBLIC_KEY: str | SecretStr | None = None
+    LANGFUSE_PUBLIC_KEY: SecretStr | None = None
     LANGFUSE_SECRET_KEY: SecretStr | None = None
-    LANGFUSE_CLIENT_PUBLIC_KEY: str | None = None
-    LANGFUSE_ENVIRONMENT: str | None = None
-    LANGFUSE_SAMPLE_RATE: float | None = None
 
     # Database Configuration
     DATABASE_TYPE: DatabaseType = (

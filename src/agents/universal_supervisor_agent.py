@@ -3,7 +3,6 @@
 import os
 from dotenv import load_dotenv
 from core import get_model, settings
-from core.langgraph import instrument_langgraph_node
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor, create_handoff_tool
 from agents.tools import calculator, JACSKE_database_search, JACSKE_get_full_doc_text
@@ -34,7 +33,6 @@ math_agent = create_react_agent(
     name="math_expert",
     prompt="You are a math expert. Always use one tool at a time.",
 ).with_config(tags=["skip_stream"])
-math_agent = instrument_langgraph_node(math_agent, "supervisor.math_expert")
 
 
 researcher_tools = [JACSKE_database_search, JACSKE_get_full_doc_text]
@@ -56,13 +54,12 @@ research_agent = create_react_agent(
     name="research_expert",
     prompt=researcher_prompt,
 ).with_config(tags=["skip_stream"])
-research_agent = instrument_langgraph_node(research_agent, "supervisor.research_expert")
 
 
 
 # Supervisor workflow with all three experts
 workflow = create_supervisor(
-    [research_agent, math_agent, instrument_langgraph_node(coding_agent, "supervisor.coding_expert")],
+    [research_agent, math_agent, coding_agent],
     tools=[
         create_handoff_tool(agent_name="math_expert", name="transfer_to_math_expert", description="Transfer task to math expert", add_handoff_messages = True),
         create_handoff_tool(agent_name="research_expert", name="transfer_to_research_expert", description="Transfer task to research expert", add_handoff_messages = True),
