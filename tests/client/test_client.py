@@ -1,13 +1,13 @@
-
 import json
 import os
+from copy import deepcopy
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from httpx import Request, Response
 
 from client import AgentClient, AgentClientError
-from schema import AgentInfo, ChatHistory, ChatMessage, ServiceMetadata
+from schema import AgentInfo, ChatHistory, ChatMessage, FeedbackResponse, ServiceMetadata
 from schema.models import OpenAIModelName
 
 
@@ -74,6 +74,21 @@ def test_invoke(agent_client):
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
 
+    # Ensure trace/session identifiers are forwarded via agent_config
+    with patch("httpx.post", return_value=mock_response) as mock_post:
+        response = agent_client.invoke(
+            QUESTION,
+            thread_id="test-thread",
+            agent_config={"temperature": 0.3},
+            trace_id="trace-123",
+            session_id="session-456",
+        )
+        assert isinstance(response, ChatMessage)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["agent_config"]["temperature"] == 0.3
+        assert payload["agent_config"]["langfuse"]["trace_id"] == "trace-123"
+        assert payload["agent_config"]["langfuse"]["session_id"] == "session-456"
+
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
     with patch("httpx.post", return_value=error_response):
@@ -112,6 +127,20 @@ async def test_ainvoke(agent_client):
         assert kwargs["json"]["message"] == QUESTION
         assert kwargs["json"]["model"] == "gpt-4o"
         assert kwargs["json"]["thread_id"] == "test-thread"
+
+    with patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
+        response = await agent_client.ainvoke(
+            QUESTION,
+            thread_id="test-thread",
+            agent_config={"temperature": 0.3},
+            trace_id="trace-123",
+            session_id="session-456",
+        )
+        assert isinstance(response, ChatMessage)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["agent_config"]["temperature"] == 0.3
+        assert payload["agent_config"]["langfuse"]["trace_id"] == "trace-123"
+        assert payload["agent_config"]["langfuse"]["session_id"] == "session-456"
 
     # Test error response
     error_response = Response(500, text="Internal Server Error", request=mock_request)
@@ -243,18 +272,51 @@ async def test_acreate_feedback(agent_client):
     RUN_ID = "test-run"
     KEY = "test-key"
     SCORE = 0.8
-    KWARGS = {"comment": "Great response!"}
+    feedback_kwargs = {"comment": "Great response!", "metadata": {"source": "ui"}}
+    original_kwargs = deepcopy(feedback_kwargs)
 
     # Test successful response
-    mock_response = Response(200, json={}, request=Request("POST", "http://test/feedback"))
+    mock_response = Response(
+        200,
+        json={
+            "status": "success",
+            "langfuse_trace_id": "trace-123",
+            "langfuse_run_id": "run-789",
+        },
+        request=Request("POST", "http://test/feedback"),
+    )
     with patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
-        await agent_client.acreate_feedback(RUN_ID, KEY, SCORE, KWARGS)
+        response = await agent_client.acreate_feedback(
+            RUN_ID,
+            KEY,
+            SCORE,
+            feedback_kwargs,
+            trace_id="trace-123",
+            session_id="session-456",
+            langfuse_run_id="run-789",
+        )
         # Verify request
-        args, kwargs = mock_post.call_args
-        assert kwargs["json"]["run_id"] == RUN_ID
-        assert kwargs["json"]["key"] == KEY
-        assert kwargs["json"]["score"] == SCORE
-        assert kwargs["json"]["kwargs"] == KWARGS
+        _, call_kwargs = mock_post.call_args
+        payload = call_kwargs["json"]
+        assert payload["run_id"] == RUN_ID
+        assert payload["key"] == KEY
+        assert payload["score"] == SCORE
+        assert payload["trace_id"] == "trace-123"
+        assert payload["session_id"] == "session-456"
+        assert payload["kwargs"]["comment"] == original_kwargs["comment"]
+        assert payload["kwargs"]["metadata"]["source"] == "ui"
+        assert payload["kwargs"]["metadata"]["langfuse_trace_id"] == "trace-123"
+        assert payload["kwargs"]["metadata"]["langfuse_session_id"] == "session-456"
+        assert payload["kwargs"] is not feedback_kwargs  # ensure copy was created
+        assert payload["kwargs"]["metadata"] is not feedback_kwargs["metadata"]
+        assert feedback_kwargs == original_kwargs
+        headers = call_kwargs["headers"]
+        assert headers["X-Langfuse-Trace-Id"] == "trace-123"
+        assert headers["X-Langfuse-Session-Id"] == "session-456"
+        assert headers["X-Langfuse-Run-Id"] == "run-789"
+        assert isinstance(response, FeedbackResponse)
+        assert response.langfuse_trace_id == "trace-123"
+        assert response.langfuse_run_id == "run-789"
 
     # Test error response
     error_response = Response(

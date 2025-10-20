@@ -156,10 +156,30 @@ class Feedback(BaseModel):  # type: ignore[no-redef]
         default={},
         examples=[{"comment": "In-line human feedback"}],
     )
+    trace_id: str | None = Field(
+        default=None,
+        description="Optional Langfuse trace identifier used for scoring integration.",
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="Optional Langfuse session identifier to correlate UI actions.",
+    )
+    langfuse_run_id: str | None = Field(
+        default=None,
+        description="Optional Langfuse run identifier for associating feedback to a span/run.",
+    )
 
 
 class FeedbackResponse(BaseModel):
     status: Literal["success"] = "success"
+    langfuse_trace_id: str | None = Field(
+        default=None,
+        description="Trace identifier acknowledged by Langfuse for this feedback.",
+    )
+    langfuse_run_id: str | None = Field(
+        default=None,
+        description="Run identifier acknowledged by Langfuse for this feedback.",
+    )
 
 
 class ChatHistoryInput(BaseModel):

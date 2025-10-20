@@ -26,9 +26,10 @@ from langgraph.managed import RemainingSteps
 from typing_extensions import TypedDict, Annotated
 
 from core import get_model, settings
+from core.langgraph import ensure_langfuse_state, instrument_langgraph_node
+from core.tools import instrument_langfuse_tool
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langgraph.graph.message import add_messages
-from service import catalog_postgres
 
 import builtins
 
@@ -57,6 +58,7 @@ class CodingState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     remaining_steps: RemainingSteps  # required by the built-in agent
     runtime_ids: dict[str, Any]      # <-- keep your injected IDs
+    langfuse: dict[str, Any]
 
 
 
@@ -71,6 +73,8 @@ def _extract_runtime_ids(state: MessagesState) -> tuple[Optional[str], Optional[
 async def _load_user_uploads(user_id: Optional[str], thread_id: Optional[str]) -> list[Any]:
     if not user_id:
         return []
+    from service import catalog_postgres
+
     try:
         records = catalog_postgres.list_metadata(user_id=user_id, thread_id=thread_id)
         if inspect.isawaitable(records):
@@ -154,6 +158,9 @@ async def python_repl(
         return f"Execution failed: {e}"
 
 
+python_repl = instrument_langfuse_tool(python_repl, name="python_repl")
+
+
 prompt_coding_agent = """\
 You are a senior Python coding assistant specialized in data-science and plotting.
 
@@ -189,13 +196,15 @@ def _pre_model_inject_runtime_ids(state: MessagesState, config: RunnableConfig) 
     messages = state.get("messages", [])
     if not isinstance(messages, list):
         messages = list(messages)
-    return {
+    payload: dict[str, Any] = {
         "messages": messages,
         "runtime_ids": {
             "user_id": cfg.get("user_id"),
             "thread_id": cfg.get("thread_id"),
         },
     }
+    ensure_langfuse_state(payload, config=config, state=state)
+    return payload
 
 
 # Create the coding expert agent with a pre_model_hook to inject runtime IDs
@@ -210,7 +219,16 @@ coding_agent = create_react_agent(
 
 
 builder = StateGraph(MessagesState)
-builder.add_node("react_agent", coding_agent)
+@instrument_langgraph_node("coding.react_agent")
+async def _react_agent_node(state: MessagesState, config: RunnableConfig) -> dict[str, Any]:
+    ensure_langfuse_state(state, config=config)
+    result = await coding_agent.ainvoke(state, config=config)
+    if isinstance(result, dict):
+        ensure_langfuse_state(result, config=config, previous=state)
+    return result
+
+
+builder.add_node("react_agent", _react_agent_node)
 builder.add_edge(START, "react_agent")
 builder.add_edge("react_agent", END)
 
