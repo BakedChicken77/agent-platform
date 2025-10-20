@@ -1,16 +1,14 @@
 
-import io
 import json
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import langsmith
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
-
-import service.files_router as files_router
-from agents.agent_registry import Agent
 from langgraph.pregel.types import StateSnapshot
 from langgraph.types import Interrupt
+
+from agents.agent_registry import Agent
 from schema import ChatHistory, ChatMessage, ServiceMetadata
 from schema.models import OpenAIModelName
 
@@ -149,173 +147,23 @@ def test_invoke_interrupt(test_client, mock_agent) -> None:
     assert output.content == INTERRUPT
 
 
-@patch("service.service.get_langfuse_client")
 @patch("service.service.LangsmithClient")
-def test_feedback(
-    mock_client: langsmith.Client, mock_get_langfuse_client, test_client
-) -> None:
+def test_feedback(mock_client: langsmith.Client, test_client) -> None:
     ls_instance = mock_client.return_value
     ls_instance.create_feedback.return_value = None
-    langfuse_client = Mock()
-    langfuse_client.create_score.return_value = None
-    mock_get_langfuse_client.return_value = langfuse_client
     body = {
         "run_id": "847c6285-8fc9-4560-a83f-4e6285809254",
         "key": "human-feedback-stars",
         "score": 0.8,
-        "trace_id": "trace-123",
-        "session_id": "session-456",
-        "langfuse_run_id": "run-xyz",
-        "kwargs": {
-            "comment": "Great",
-            "metadata": {
-                "source": "ui",
-                "langfuse_trace_id": "trace-123",
-                "langfuse_session_id": "session-456",
-            },
-        },
     }
     response = test_client.post("/feedback", json=body)
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "success",
-        "langfuse_trace_id": "trace-123",
-        "langfuse_run_id": "run-xyz",
-    }
+    assert response.json() == {"status": "success"}
     ls_instance.create_feedback.assert_called_once_with(
         run_id="847c6285-8fc9-4560-a83f-4e6285809254",
         key="human-feedback-stars",
         score=0.8,
-        **body["kwargs"],
     )
-    langfuse_client.create_score.assert_called_once_with(
-        trace_id="trace-123",
-        name="human-feedback-stars",
-        value=0.8,
-        data_type="NUMERIC",
-        comment="Great",
-        metadata={
-            "source": "ui",
-            "langfuse_trace_id": "trace-123",
-            "langfuse_session_id": "session-456",
-        },
-    )
-
-
-@patch("service.service.get_langfuse_client")
-@patch("service.service.LangsmithClient")
-def test_feedback_langfuse_fallback(
-    mock_client: langsmith.Client, mock_get_langfuse_client, test_client
-) -> None:
-    ls_instance = mock_client.return_value
-    ls_instance.create_feedback.return_value = None
-    langfuse_client = Mock(create_score=None)
-    langfuse_client.score_current_trace = Mock()
-    mock_get_langfuse_client.return_value = langfuse_client
-
-    body = {
-        "run_id": "run-123",
-        "key": "human-feedback-stars",
-        "score": 0.5,
-    }
-
-    response = test_client.post("/feedback", json=body)
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "success",
-        "langfuse_trace_id": None,
-        "langfuse_run_id": "run-123",
-    }
-    ls_instance.create_feedback.assert_called_once()
-    langfuse_client.score_current_trace.assert_called_once_with(
-        name="human-feedback-stars",
-        value=0.5,
-        data_type="NUMERIC",
-    )
-
-
-def test_file_upload_accepts_langfuse_headers(monkeypatch, test_client, tmp_path):
-    captured: dict[str, object] = {}
-
-    def fake_build_runtime(request, *, user_id, thread_id):
-        trace = request.headers.get(files_router.LANGFUSE_TRACE_HEADER)
-        session = request.headers.get(files_router.LANGFUSE_SESSION_HEADER)
-        run = request.headers.get(files_router.LANGFUSE_RUN_HEADER)
-        captured["headers"] = {
-            "trace": trace,
-            "session": session,
-            "run": run,
-            "thread_id": thread_id,
-            "user_id": user_id,
-        }
-        runtime = {"user_id": user_id, "thread_id": thread_id}
-        if trace:
-            runtime["trace_id"] = trace
-        if session:
-            runtime["session_id"] = session
-        if run:
-            runtime["run_id"] = run
-        return runtime
-
-    class _Context:
-        def __enter__(self):
-            return None
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    def fake_start_file_span(name, runtime, **metadata):
-        captured["runtime"] = runtime
-        captured["metadata"] = metadata
-        return None, _Context(), metadata
-
-    def fake_write_stream(target_dir, file_id, src, max_bytes):
-        captured["file_id"] = file_id
-        captured["target_dir"] = target_dir
-        captured["payload"] = src.read()
-        return tmp_path / file_id
-
-    monkeypatch.setattr(files_router, "_build_langfuse_runtime", fake_build_runtime)
-    monkeypatch.setattr(files_router, "_start_file_span", fake_start_file_span)
-    monkeypatch.setattr(
-        files_router,
-        "build_user_dir",
-        lambda *, user_id, thread_id, tenant_id=None: tmp_path,
-    )
-    monkeypatch.setattr(
-        files_router,
-        "write_stream_atomic_with_limit",
-        fake_write_stream,
-    )
-    monkeypatch.setattr(
-        files_router.catalog,
-        "get_by_sha_and_name",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(files_router.catalog, "save_metadata", lambda meta: None)
-
-    response = test_client.post(
-        "/files/upload",
-        params={"thread_id": "thread-789"},
-        headers={
-            "X-Langfuse-Trace-Id": "trace-abc",
-            "X-Langfuse-Session-Id": "session-def",
-            "X-Langfuse-Run-Id": "run-ghi",
-        },
-        files=[("files", ("note.txt", io.BytesIO(b"hello world"), "text/plain"))],
-    )
-
-    assert response.status_code == 200
-    assert captured["headers"] == {
-        "trace": "trace-abc",
-        "session": "session-def",
-        "run": "run-ghi",
-        "thread_id": "thread-789",
-        "user_id": "unknown",
-    }
-    assert captured["runtime"]["trace_id"] == "trace-abc"
-    assert captured["runtime"]["session_id"] == "session-def"
-    assert captured["runtime"]["run_id"] == "run-ghi"
 
 
 def test_history(test_client, mock_agent) -> None:

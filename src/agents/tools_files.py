@@ -6,7 +6,6 @@ from typing import Annotated, Optional
 from langchain_core.tools import tool
 
 from core import settings
-from core.tools import instrument_langfuse_tool
 from schema.files import FileMeta, ListFilesResponse
 from service.catalog import list_metadata, get_metadata
 from langgraph.prebuilt import InjectedState
@@ -60,7 +59,3 @@ async def ReadUserFile(
     if as_text:
         return data.decode("utf-8", errors="replace")
     return repr(data)
-
-
-ListUserFiles = instrument_langfuse_tool(ListUserFiles, name="ListUserFiles")
-ReadUserFile = instrument_langfuse_tool(ReadUserFile, name="ReadUserFile")

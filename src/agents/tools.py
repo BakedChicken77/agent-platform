@@ -7,7 +7,6 @@ from langchain_chroma import Chroma
 from langchain_core.tools import BaseTool, tool
 from langchain_openai import AzureOpenAIEmbeddings
 from core import settings
-from core.tools import instrument_langfuse_tool
 from sqlalchemy import create_engine, text
 from langchain_community.vectorstores import PGVector
 
@@ -316,13 +315,3 @@ Retrieves up to 15 pages of a document by its exact filename (e.g., 'HDD22011390
     - If page_number ≤ 10, it returns pages 1 through 15.
     - If page_number > 10, it returns pages from page_number - 7 to page_number + 7.\
 """
-
-
-# Langfuse instrumentation for tool telemetry
-calculator = instrument_langfuse_tool(calculator, name="Calculator")
-database_search = instrument_langfuse_tool(database_search, name="SEPS_Database_Search")
-get_full_doc_text = instrument_langfuse_tool(get_full_doc_text, name="SEPS_Get_Full_Doc_Text")
-SEPS_database_search = instrument_langfuse_tool(SEPS_database_search, name="SEPS_Database_Search")
-SEPS_get_full_doc_text = instrument_langfuse_tool(SEPS_get_full_doc_text, name="SEPS_Get_Full_Doc_Text")
-JACSKE_database_search = instrument_langfuse_tool(JACSKE_database_search, name="JACSKE_Database_Search")
-JACSKE_get_full_doc_text = instrument_langfuse_tool(JACSKE_get_full_doc_text, name="JACSKE_Get_Full_Doc_Text")
