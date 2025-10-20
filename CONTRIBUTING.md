@@ -43,5 +43,10 @@ Always run the regression suite before submitting a change:
 uv run pytest
 ```
 
+Using `uv run` (or first activating `.venv` with `source .venv/bin/activate`) is
+important—invoking `pytest` with the system interpreter will skip the synced
+dependencies and surface `ModuleNotFoundError` messages for packages such as
+`langchain_core`, `pydantic`, `httpx`, `streamlit`, `fastapi`, or `starlette`.
+
 The repository ships with Langfuse-aware tests that mock the SDK. No external
 network calls are required.
